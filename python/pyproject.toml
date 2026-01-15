@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "delta-go-python"
+version = "0.1.0"
+description = "Python components for Delta-Go trading bot"
+requires-python = ">=3.11"
+dependencies = [
+    "regime-ml",
+]
+
+[tool.uv.sources]
+regime-ml = { path = "./regime_ml" }

@@ -1,0 +1,326 @@
+package delta
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"github.com/kasyap/delta-go/go/config"
+)
+
+// WebSocketClient handles real-time market data from Delta Exchange
+type WebSocketClient struct {
+	cfg  *config.Config
+	conn *websocket.Conn
+	url  string
+
+	// Subscriptions
+	subscriptions []string
+
+	// Callbacks
+	onTicker    func(Ticker)
+	onCandle    func(Candle)
+	onOrderbook func(json.RawMessage)
+	onError     func(error)
+
+	// State
+	mu           sync.RWMutex
+	isConnected  bool
+	stopChan     chan struct{}
+	reconnecting bool
+}
+
+// WebSocketMessage represents a message from Delta Exchange WebSocket
+type WebSocketMessage struct {
+	Type    string          `json:"type"`
+	Channel string          `json:"channel,omitempty"`
+	Symbol  string          `json:"symbol,omitempty"`
+	Data    json.RawMessage `json:"data,omitempty"`
+}
+
+// NewWebSocketClient creates a new WebSocket client
+func NewWebSocketClient(cfg *config.Config) *WebSocketClient {
+	return &WebSocketClient{
+		cfg:           cfg,
+		url:           cfg.WebSocketURL,
+		subscriptions: []string{},
+		stopChan:      make(chan struct{}),
+	}
+}
+
+// OnTicker sets the ticker callback
+func (ws *WebSocketClient) OnTicker(callback func(Ticker)) {
+	ws.onTicker = callback
+}
+
+// OnCandle sets the candle callback
+func (ws *WebSocketClient) OnCandle(callback func(Candle)) {
+	ws.onCandle = callback
+}
+
+// OnOrderbook sets the orderbook callback
+func (ws *WebSocketClient) OnOrderbook(callback func(json.RawMessage)) {
+	ws.onOrderbook = callback
+}
+
+// OnError sets the error callback
+func (ws *WebSocketClient) OnError(callback func(error)) {
+	ws.onError = callback
+}
+
+// Connect establishes WebSocket connection
+func (ws *WebSocketClient) Connect() error {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	dialer := websocket.DefaultDialer
+	dialer.HandshakeTimeout = 10 * time.Second
+
+	conn, _, err := dialer.Dial(ws.url, nil)
+	if err != nil {
+		return fmt.Errorf("websocket dial failed: %v", err)
+	}
+
+	ws.conn = conn
+	ws.isConnected = true
+
+	// Start message handler
+	go ws.readMessages()
+
+	// Start heartbeat
+	go ws.heartbeat()
+
+	// Resubscribe to channels
+	for _, sub := range ws.subscriptions {
+		ws.sendSubscribe(sub)
+	}
+
+	log.Printf("WebSocket connected to %s", ws.url)
+	return nil
+}
+
+// Subscribe subscribes to a channel
+func (ws *WebSocketClient) Subscribe(channel string) error {
+	ws.mu.Lock()
+	ws.subscriptions = append(ws.subscriptions, channel)
+	ws.mu.Unlock()
+
+	if ws.isConnected {
+		return ws.sendSubscribe(channel)
+	}
+	return nil
+}
+
+// SubscribeTicker subscribes to ticker updates for a symbol
+func (ws *WebSocketClient) SubscribeTicker(symbol string) error {
+	channel := fmt.Sprintf("v2/ticker.%s", symbol)
+	return ws.Subscribe(channel)
+}
+
+// SubscribeCandles subscribes to candle updates
+func (ws *WebSocketClient) SubscribeCandles(symbol, resolution string) error {
+	channel := fmt.Sprintf("candlestick_%s.%s", resolution, symbol)
+	return ws.Subscribe(channel)
+}
+
+// SubscribeOrderbook subscribes to L2 orderbook
+func (ws *WebSocketClient) SubscribeOrderbook(symbol string) error {
+	channel := fmt.Sprintf("l2_orderbook.%s", symbol)
+	return ws.Subscribe(channel)
+}
+
+// sendSubscribe sends subscription message
+func (ws *WebSocketClient) sendSubscribe(channel string) error {
+	msg := map[string]interface{}{
+		"type": "subscribe",
+		"payload": map[string]interface{}{
+			"channels": []map[string]string{
+				{"name": channel},
+			},
+		},
+	}
+
+	return ws.sendJSON(msg)
+}
+
+// sendJSON sends a JSON message
+func (ws *WebSocketClient) sendJSON(msg interface{}) error {
+	ws.mu.RLock()
+	defer ws.mu.RUnlock()
+
+	if ws.conn == nil {
+		return fmt.Errorf("websocket not connected")
+	}
+
+	return ws.conn.WriteJSON(msg)
+}
+
+// readMessages handles incoming WebSocket messages
+func (ws *WebSocketClient) readMessages() {
+	for {
+		select {
+		case <-ws.stopChan:
+			return
+		default:
+			if ws.conn == nil {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+
+			_, message, err := ws.conn.ReadMessage()
+			if err != nil {
+				if !ws.reconnecting {
+					log.Printf("WebSocket read error: %v", err)
+					if ws.onError != nil {
+						ws.onError(err)
+					}
+					ws.reconnect()
+				}
+				return
+			}
+
+			ws.handleMessage(message)
+		}
+	}
+}
+
+// handleMessage processes incoming messages
+func (ws *WebSocketClient) handleMessage(data []byte) {
+	var msg WebSocketMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		log.Printf("Failed to parse WebSocket message: %v", err)
+		return
+	}
+
+	switch {
+	case msg.Type == "v2/ticker" || contains(msg.Channel, "ticker"):
+		if ws.onTicker != nil {
+			var ticker Ticker
+			if err := json.Unmarshal(msg.Data, &ticker); err == nil {
+				ws.onTicker(ticker)
+			}
+		}
+
+	case contains(msg.Channel, "candlestick"):
+		if ws.onCandle != nil {
+			var candle Candle
+			if err := json.Unmarshal(msg.Data, &candle); err == nil {
+				ws.onCandle(candle)
+			}
+		}
+
+	case contains(msg.Channel, "l2_orderbook"):
+		if ws.onOrderbook != nil {
+			ws.onOrderbook(msg.Data)
+		}
+
+	case msg.Type == "subscribed":
+		log.Printf("Subscribed to: %s", msg.Channel)
+
+	case msg.Type == "error":
+		log.Printf("WebSocket error: %s", string(data))
+		if ws.onError != nil {
+			ws.onError(fmt.Errorf("websocket error: %s", string(data)))
+		}
+	}
+}
+
+// heartbeat sends periodic pings to keep connection alive
+func (ws *WebSocketClient) heartbeat() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ws.stopChan:
+			return
+		case <-ticker.C:
+			ws.mu.RLock()
+			if ws.conn != nil && ws.isConnected {
+				if err := ws.conn.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
+					log.Printf("Heartbeat ping failed: %v", err)
+				}
+			}
+			ws.mu.RUnlock()
+		}
+	}
+}
+
+// reconnect attempts to reconnect with exponential backoff
+func (ws *WebSocketClient) reconnect() {
+	ws.mu.Lock()
+	if ws.reconnecting {
+		ws.mu.Unlock()
+		return
+	}
+	ws.reconnecting = true
+	ws.isConnected = false
+	ws.mu.Unlock()
+
+	backoff := time.Second
+	maxBackoff := 30 * time.Second
+
+	for {
+		select {
+		case <-ws.stopChan:
+			return
+		default:
+			log.Printf("Attempting to reconnect in %v...", backoff)
+			time.Sleep(backoff)
+
+			if err := ws.Connect(); err != nil {
+				log.Printf("Reconnection failed: %v", err)
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+				continue
+			}
+
+			ws.mu.Lock()
+			ws.reconnecting = false
+			ws.mu.Unlock()
+
+			log.Println("Successfully reconnected")
+			return
+		}
+	}
+}
+
+// Close closes the WebSocket connection
+func (ws *WebSocketClient) Close() {
+	close(ws.stopChan)
+
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	if ws.conn != nil {
+		ws.conn.Close()
+		ws.conn = nil
+	}
+	ws.isConnected = false
+}
+
+// IsConnected returns connection status
+func (ws *WebSocketClient) IsConnected() bool {
+	ws.mu.RLock()
+	defer ws.mu.RUnlock()
+	return ws.isConnected
+}
+
+// helper function
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstr(s, substr))
+}
+
+func containsSubstr(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
