@@ -26,6 +26,7 @@ def save_model(
     """
     model_data = {
         'model': detector.model,
+        'scaler': detector.scaler,  # Persist scaler for correct feature transformation
         'n_states': detector.n_states,
         'state_to_regime': detector._state_to_regime,
         'symbol': symbol,
@@ -53,6 +54,7 @@ def load_model(model_path: str) -> HMMMarketDetector:
     
     detector = HMMMarketDetector(n_states=model_data['n_states'])
     detector.model = model_data['model']
+    detector.scaler = model_data.get('scaler')  # Restore scaler for correct feature transformation
     detector._state_to_regime = model_data['state_to_regime']
     detector._is_trained = True
     

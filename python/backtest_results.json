@@ -1,0 +1,149 @@
+{
+  "config": {
+    "symbols": [
+      "BTCUSD",
+      "ETHUSD",
+      "SOLUSD"
+    ],
+    "start_date": "2025-07-20T18:20:22.602614",
+    "end_date": "2026-01-16T18:20:22.602614",
+    "initial_capital": 10000
+  },
+  "metrics": {
+    "total_trades": 10,
+    "winning_trades": 6,
+    "losing_trades": 4,
+    "win_rate_pct": 60.0,
+    "profit_factor": 1.0,
+    "net_pnl": -92.73,
+    "total_return_pct": -0.93,
+    "max_drawdown_pct": 17.58,
+    "sharpe_ratio": 0.07,
+    "avg_win": 274.74,
+    "avg_loss": 411.02,
+    "avg_duration_hours": 14.9,
+    "final_equity": 9907.27
+  },
+  "trades": [
+    {
+      "symbol": "ETHUSD",
+      "side": "sell",
+      "entry_time": "2025-08-09T10:00:00",
+      "entry_price": 4218.006230000001,
+      "exit_time": "2025-08-09T20:00:00",
+      "exit_price": 4293.823593,
+      "exit_reason": "stop_loss",
+      "pnl": -369.67358768694464,
+      "regime": "ranging",
+      "confidence": 0.9099713777297538
+    },
+    {
+      "symbol": "ETHUSD",
+      "side": "sell",
+      "entry_time": "2025-08-12T21:00:00",
+      "entry_price": 4617.676280000001,
+      "exit_time": "2025-08-12T21:00:00",
+      "exit_price": 4497.659352,
+      "exit_reason": "stop_loss",
+      "pnl": 490.7089532201972,
+      "regime": "ranging",
+      "confidence": 0.8600298602981946
+    },
+    {
+      "symbol": "SOLUSD",
+      "side": "buy",
+      "entry_time": "2025-08-23T06:00:00",
+      "entry_price": 207.7225362,
+      "exit_time": "2025-08-23T08:00:00",
+      "exit_price": 202.75613902271877,
+      "exit_reason": "stop_loss",
+      "pnl": -492.88538479567796,
+      "regime": "high_volatility",
+      "confidence": 0.8499433595289742
+    },
+    {
+      "symbol": "BTCUSD",
+      "side": "sell",
+      "entry_time": "2025-09-12T01:00:00",
+      "entry_price": 115779.8394,
+      "exit_time": "2025-09-12T01:00:00",
+      "exit_price": 114871.41969,
+      "exit_reason": "stop_loss",
+      "pnl": 141.09725666571367,
+      "regime": "ranging",
+      "confidence": 0.9070411118676387
+    },
+    {
+      "symbol": "ETHUSD",
+      "side": "sell",
+      "entry_time": "2025-10-12T18:00:00",
+      "entry_price": 4125.274780000001,
+      "exit_time": "2025-10-12T18:00:00",
+      "exit_price": 4085.2468860000004,
+      "exit_reason": "stop_loss",
+      "pnl": 179.18511220575823,
+      "regime": "ranging",
+      "confidence": 0.8986231665479447
+    },
+    {
+      "symbol": "BTCUSD",
+      "side": "sell",
+      "entry_time": "2025-10-27T07:00:00",
+      "entry_price": 115996.796,
+      "exit_time": "2025-10-27T07:00:00",
+      "exit_price": 115320.15942,
+      "exit_reason": "stop_loss",
+      "pnl": 105.6492108954883,
+      "regime": "ranging",
+      "confidence": 0.902418042550523
+    },
+    {
+      "symbol": "ETHUSD",
+      "side": "sell",
+      "entry_time": "2025-12-03T22:00:00",
+      "entry_price": 3162.7673200000004,
+      "exit_time": "2025-12-03T23:00:00",
+      "exit_price": 3213.122496,
+      "exit_reason": "stop_loss",
+      "pnl": -328.4240504784294,
+      "regime": "ranging",
+      "confidence": 0.9091272251947249
+    },
+    {
+      "symbol": "ETHUSD",
+      "side": "sell",
+      "entry_time": "2025-12-04T00:00:00",
+      "entry_price": 3187.21243,
+      "exit_time": "2025-12-09T16:00:00",
+      "exit_price": 3260.356941,
+      "exit_reason": "stop_loss",
+      "pnl": -453.1092446345105,
+      "regime": "ranging",
+      "confidence": 0.9099482512088404
+    },
+    {
+      "symbol": "BTCUSD",
+      "side": "sell",
+      "entry_time": "2026-01-13T21:00:00",
+      "entry_price": 94337.1288,
+      "exit_time": "2026-01-13T21:00:00",
+      "exit_price": 93638.724,
+      "exit_reason": "stop_loss",
+      "pnl": 127.00496656965971,
+      "regime": "ranging",
+      "confidence": 0.8740979415299527
+    },
+    {
+      "symbol": "ETHUSD",
+      "side": "sell",
+      "entry_time": "2026-01-14T00:00:00",
+      "entry_price": 3324.7349200000003,
+      "exit_time": "2026-01-14T00:00:00",
+      "exit_price": 3215.1529020000003,
+      "exit_reason": "stop_loss",
+      "pnl": 604.819265219177,
+      "regime": "ranging",
+      "confidence": 0.8974286808781864
+    }
+  ]
+}

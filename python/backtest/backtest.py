@@ -18,6 +18,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Tuple
+from pathlib import Path
 
 from regime_ml import HMMMarketDetector, DeltaDataFetcher, load_model
 
@@ -61,16 +62,25 @@ class BacktestConfig:
     start_date: datetime
     end_date: datetime
     initial_capital: float = 10000.0
-    leverage: int = 10
+    leverage: int = 5  # Reduced from 10 for sustainable drawdowns
     risk_per_trade_pct: float = 1.0
     commission_pct: float = 0.05
     slippage_pct: float = 0.02
-    min_confidence: float = 0.6
+    min_confidence: float = 0.65  # Reverted from 0.75 (was over-filtering)
     hmm_lookback: int = 200
     strategy_server_url: str = "http://localhost:8081"
     daily_loss_limit_pct: float = -5.0
-    min_hmm_confidence: float = 0.7
-    models_dir: str = "../../models"
+    min_hmm_confidence: float = 0.70  # Reverted from 0.85 (was over-filtering)
+    models_dir: str = None  # Will default to repo root models/ directory
+    use_4h_filter: bool = True  # Multi-timeframe confirmation
+    
+    def __post_init__(self):
+        """Set default models directory to repo root"""
+        if self.models_dir is None:
+            # Get repo root (parent of python directory)
+            python_dir = Path(__file__).parent.parent
+            repo_root = python_dir.parent
+            self.models_dir = str(repo_root / 'models')
 
 
 class TradeSimulator:
@@ -408,6 +418,29 @@ class BacktestEngine:
                     strat_conf = signal.get('confidence', 0)
                     total_score = (strat_conf * 0.6) + (hmm_conf * 0.4)
                     
+                    # 4H multi-timeframe filter (relaxed - only for high_volatility regime)
+                    if self.config.use_4h_filter and regime == 'high_volatility':
+                        closes_1h = candles['close'].values
+                        if len(closes_1h) >= 80:
+                            closes_4h = closes_1h[::4]
+                            ema_20 = np.mean(closes_4h[-20:])
+                            current_4h = closes_4h[-1]
+                            trend_up = current_4h > ema_20
+                            
+                            signal_side = signal.get('side', '')
+                            if signal_side == 'buy' and not trend_up:
+                                continue
+                            if signal_side == 'sell' and trend_up:
+                                continue
+                    
+                    # Stricter long entry criteria (longs underperforming)
+                    signal_side = signal.get('side', '')
+                    if signal_side == 'buy':
+                        if total_score < 0.70:  # Require higher score for longs
+                            continue
+                        if regime == 'bear':  # No longs in bear regime
+                            continue
+                    
                     if total_score >= self.config.min_confidence and total_score > best_score:
                         best_signal = signal
                         best_score = total_score
@@ -419,12 +452,27 @@ class BacktestEngine:
                     next_candle = self.data[best_symbol].iloc[i + 1]
                     entry_price = next_candle['open']
                     
+                    stop_loss = best_signal.get('stop_loss', entry_price * 0.98)
+                    take_profit = best_signal.get('take_profit', entry_price * 1.04)
+                    
+                    # Widen stop loss for high volatility trades (2x normal)
+                    if best_regime == 'high_volatility':
+                        candles = self.data[best_symbol].iloc[i - 20:i + 1]
+                        atr = self.calculate_atr(candles)
+                        if atr > 0:
+                            if best_signal['side'] == 'buy':
+                                stop_loss = entry_price - (2.5 * atr)  # Wider stop
+                                take_profit = entry_price + (3.0 * atr)  # Keep 1.2 R:R
+                            else:
+                                stop_loss = entry_price + (2.5 * atr)
+                                take_profit = entry_price - (3.0 * atr)
+                    
                     trade = self.simulator.open_position(
                         symbol=best_symbol,
                         side=best_signal['side'],
                         price=entry_price,
-                        stop_loss=best_signal.get('stop_loss', entry_price * 0.98),
-                        take_profit=best_signal.get('take_profit', entry_price * 1.04),
+                        stop_loss=stop_loss,
+                        take_profit=take_profit,
                         regime=best_regime,
                         confidence=best_score,
                         timestamp=next_candle['timestamp']
@@ -468,7 +516,9 @@ class PerformanceReport:
         gross_profit = sum(t.pnl for t in trades if t.pnl > 0)
         gross_loss = abs(sum(t.pnl for t in trades if t.pnl < 0))
         
-        net_pnl = sum(t.pnl for t in trades)
+        # Use actual equity change for accurate P&L (includes all commissions)
+        final_equity = self.simulator.equity
+        net_pnl = final_equity - self.config.initial_capital
         total_return_pct = (net_pnl / self.config.initial_capital) * 100
         
         win_rate = (winning_trades / total_trades) * 100 if total_trades > 0 else 0

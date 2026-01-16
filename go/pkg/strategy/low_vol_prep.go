@@ -71,47 +71,18 @@ func (s *LowVolPrepStrategy) Analyze(candles []delta.Candle, regime delta.Market
 		return s.scalpingAnalysis(candles, currentPrice, currentATR, currentRSI)
 	}
 
-	// Normal prep mode: Generate limit order suggestions
-	// These are prep orders to catch a breakout or fade at extremes
-
-	// Calculate prep order levels
-	buyPrepLevel := rangeLow + (rangeSize * s.PrepOrderDist)
-	sellPrepLevel := rangeHigh - (rangeSize * s.PrepOrderDist)
-
-	// If price near lower range, suggest buy prep
+	// If price near range extremes, just monitor (no trading in low vol)
 	distToLow := (currentPrice - rangeLow) / rangeSize
 	distToHigh := (rangeHigh - currentPrice) / rangeSize
 
 	if distToLow < 0.2 {
-		// Near support, prepare buy order
-		stopLoss := rangeLow - (rangeSize * 0.1)
-		takeProfit := currentPrice + (rangeSize * 0.3)
-
-		return Signal{
-			Action:     ActionBuy,
-			Side:       "buy",
-			Confidence: 0.4, // Low confidence, preparatory
-			Price:      buyPrepLevel,
-			StopLoss:   stopLoss,
-			TakeProfit: takeProfit,
-			Reason:     "low vol: prep buy limit at support",
-		}
+		// Near support - monitor but don't trade until volatility expands
+		return Signal{Action: ActionNone, Reason: "low vol: monitoring near support, await breakout"}
 	}
 
 	if distToHigh < 0.2 {
-		// Near resistance, prepare sell order
-		stopLoss := rangeHigh + (rangeSize * 0.1)
-		takeProfit := currentPrice - (rangeSize * 0.3)
-
-		return Signal{
-			Action:     ActionSell,
-			Side:       "sell",
-			Confidence: 0.4,
-			Price:      sellPrepLevel,
-			StopLoss:   stopLoss,
-			TakeProfit: takeProfit,
-			Reason:     "low vol: prep sell limit at resistance",
-		}
+		// Near resistance - monitor but don't trade until volatility expands
+		return Signal{Action: ActionNone, Reason: "low vol: monitoring near resistance, await breakout"}
 	}
 
 	// In the middle - just monitor

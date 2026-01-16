@@ -22,8 +22,8 @@ func NewHighVolBreakoutStrategy() *HighVolBreakoutStrategy {
 	return &HighVolBreakoutStrategy{
 		indicators:      NewIndicators(),
 		RangeLookback:   20,
-		VolumeThreshold: 1.5,
-		MaxChasePercent: 0.02, // 2%
+		VolumeThreshold: 2.0,   // Increased from 1.5 for stronger confirmation
+		MaxChasePercent: 0.015, // Tightened from 0.02 to reduce false breakout risk
 		ATRMultiplier:   2.0,
 	}
 }
@@ -67,7 +67,6 @@ func (s *HighVolBreakoutStrategy) Analyze(candles []delta.Candle, regime delta.M
 
 	rangeHigh := maxSlice(rangeHighs...)
 	rangeLow := minSlice(rangeLows...)
-	rangeMiddle := (rangeHigh + rangeLow) / 2
 
 	// Volume check
 	avgVolume := average(volumes[n-20-1 : n-1])
@@ -101,8 +100,8 @@ func (s *HighVolBreakoutStrategy) Analyze(candles []delta.Candle, regime delta.M
 
 	// Bullish breakout
 	if breakoutUp && volumeConfirm && strongCandle {
-		// Stop at middle of broken range (re-entry = false breakout)
-		stopLoss := rangeMiddle
+		// Stop just below the breakout level + 0.5 ATR buffer
+		stopLoss := rangeHigh - (currentATR * 0.5)
 		takeProfit := currentPrice + (currentATR * 3)
 
 		return Signal{
@@ -118,7 +117,8 @@ func (s *HighVolBreakoutStrategy) Analyze(candles []delta.Candle, regime delta.M
 
 	// Bearish breakout
 	if breakoutDown && volumeConfirm && strongCandle {
-		stopLoss := rangeMiddle
+		// Stop just above the breakout level + 0.5 ATR buffer
+		stopLoss := rangeLow + (currentATR * 0.5)
 		takeProfit := currentPrice - (currentATR * 3)
 
 		return Signal{

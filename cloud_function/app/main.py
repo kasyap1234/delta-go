@@ -5,12 +5,11 @@ Deployed as a Cloud Run function
 Supports per-coin models: BTCUSD, ETHUSD, SOLUSD, etc.
 """
 import os
-import pickle
 import functions_framework
 from flask import jsonify, request
 import numpy as np
 
-from regime_ml import HMMMarketDetector
+from regime_ml import HMMMarketDetector, load_model
 
 detectors = {}
 MODEL_DIR = os.environ.get('HMM_MODEL_DIR', '/app/models')
@@ -34,13 +33,7 @@ def get_detector(symbol: str) -> HMMMarketDetector:
     
     if os.path.exists(model_path):
         try:
-            with open(model_path, 'rb') as f:
-                model_data = pickle.load(f)
-            
-            detector = HMMMarketDetector(n_states=model_data['n_states'])
-            detector.model = model_data['model']
-            detector._state_to_regime = model_data['state_to_regime']
-            detector._is_trained = True
+            detector = load_model(model_path)
             detectors[symbol] = detector
             print(f"Loaded pre-trained model for {symbol} from {model_path}")
             return detector
@@ -50,13 +43,7 @@ def get_detector(symbol: str) -> HMMMarketDetector:
     generic_path = os.path.join(MODEL_DIR, 'hmm_model.pkl')
     if os.path.exists(generic_path):
         try:
-            with open(generic_path, 'rb') as f:
-                model_data = pickle.load(f)
-            
-            detector = HMMMarketDetector(n_states=model_data['n_states'])
-            detector.model = model_data['model']
-            detector._state_to_regime = model_data['state_to_regime']
-            detector._is_trained = True
+            detector = load_model(generic_path)
             detectors[symbol] = detector
             print(f"Using generic model for {symbol}")
             return detector

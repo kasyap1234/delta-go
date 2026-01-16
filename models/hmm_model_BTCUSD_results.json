@@ -13,14 +13,14 @@
       "train_end": "2024-06-29T13:00:00",
       "val_start": "2024-06-29T13:00:00",
       "val_end": "2024-07-29T13:00:00",
-      "log_likelihood": 7641.9411992842315,
-      "transition_stability": 0.8986111111111111,
+      "log_likelihood": -1269.4974488542227,
+      "transition_stability": 0.95,
       "regime_distribution": {
-        "ranging": 1.3374056450023134e-21,
+        "bear": 0.0,
+        "ranging": 0.997929160873791,
         "low_volatility": 0.0,
-        "high_volatility": 0.0,
-        "bull": 0.0009940814334790692,
-        "bear": 0.999005918566438
+        "bull": 0.0,
+        "high_volatility": 0.002070839126191711
       }
     },
     {
@@ -28,14 +28,14 @@
       "train_end": "2024-07-29T13:00:00",
       "val_start": "2024-07-29T13:00:00",
       "val_end": "2024-08-29T13:00:00",
-      "log_likelihood": 7780.76556801403,
-      "transition_stability": 0.9126344086021505,
+      "log_likelihood": -2692.651067472335,
+      "transition_stability": 0.9327956989247312,
       "regime_distribution": {
-        "high_volatility": 0.00011718050326383692,
+        "high_volatility": 0.06295849986256395,
+        "bear": 5.6895583239721205e-06,
+        "bull": 0.9370357322366628,
         "low_volatility": 0.0,
-        "bull": 0.43963366305643026,
-        "bear": 6.449195937647269e-05,
-        "ranging": 0.5601846644806805
+        "ranging": 7.834225401968179e-08
       }
     },
     {
@@ -43,14 +43,14 @@
       "train_end": "2024-08-29T13:00:00",
       "val_start": "2024-08-29T13:00:00",
       "val_end": "2024-09-29T13:00:00",
-      "log_likelihood": 9052.099955302154,
-      "transition_stability": 0.8938172043010753,
+      "log_likelihood": -3326.2705423640773,
+      "transition_stability": 0.8978494623655914,
       "regime_distribution": {
-        "low_volatility": 0.07399559601389588,
-        "ranging": 0.9253382050175123,
-        "high_volatility": 5.006250225317275e-05,
-        "bear": 0.0005765394953223016,
-        "bull": 3.959697173918986e-05
+        "bear": 0.0001496586435956404,
+        "ranging": 8.229108740630384e-12,
+        "low_volatility": 0.9998500059589424,
+        "bull": 3.34671521384046e-07,
+        "high_volatility": 7.178001585244165e-10
       }
     },
     {
@@ -58,14 +58,14 @@
       "train_end": "2024-09-29T13:00:00",
       "val_start": "2024-09-29T13:00:00",
       "val_end": "2024-10-29T13:00:00",
-      "log_likelihood": 8925.330540458659,
-      "transition_stability": 0.8875,
+      "log_likelihood": -3243.5312184611807,
+      "transition_stability": 0.9152777777777777,
       "regime_distribution": {
-        "bear": 0.0015713912461553874,
-        "ranging": 2.8669566101508155e-14,
-        "high_volatility": 5.874314592481939e-08,
-        "bull": 0.9983455255738239,
-        "low_volatility": 8.302443603682035e-05
+        "bear": 0.06413340358429995,
+        "low_volatility": 0.0002240719439867593,
+        "bull": 0.00016152599723791994,
+        "ranging": 0.9354808214365803,
+        "high_volatility": 1.7703807042324322e-07
       }
     },
     {
@@ -73,14 +73,14 @@
       "train_end": "2024-10-29T13:00:00",
       "val_start": "2024-10-29T13:00:00",
       "val_end": "2024-11-29T13:00:00",
-      "log_likelihood": 8402.254237883677,
-      "transition_stability": 0.8830645161290323,
+      "log_likelihood": -4370.793371628616,
+      "transition_stability": 0.8991935483870968,
       "regime_distribution": {
-        "low_volatility": 6.9058407708544e-09,
-        "ranging": 3.408798396447003e-06,
-        "high_volatility": 2.606675592624248e-07,
-        "bear": 0.2973743381482436,
-        "bull": 0.7026219854791793
+        "ranging": 0.001933861743296275,
+        "low_volatility": 0.001058494530849048,
+        "bull": 1.21579815541172e-12,
+        "high_volatility": 4.2048641129739306e-05,
+        "bear": 0.9969655950837739
       }
     },
     {
@@ -88,14 +88,14 @@
       "train_end": "2024-11-29T13:00:00",
       "val_start": "2024-11-29T13:00:00",
       "val_end": "2024-12-29T13:00:00",
-      "log_likelihood": 8820.699838659304,
-      "transition_stability": 0.8972222222222223,
+      "log_likelihood": -3750.149227724762,
+      "transition_stability": 0.8986111111111111,
       "regime_distribution": {
-        "bear": 0.0001765017057608464,
-        "low_volatility": 0.9996450286854974,
-        "ranging": 8.568759509442858e-10,
-        "high_volatility": 1.2959466737757155e-07,
-        "bull": 0.00017833915645690634
+        "high_volatility": 5.700053445605356e-12,
+        "bull": 1.842818402569896e-15,
+        "bear": 2.367009293314861e-05,
+        "ranging": 5.314968970993955e-11,
+        "low_volatility": 0.9999763298483412
       }
     },
     {
@@ -103,14 +103,14 @@
       "train_end": "2024-12-29T13:00:00",
       "val_start": "2024-12-29T13:00:00",
       "val_end": "2025-01-29T13:00:00",
-      "log_likelihood": 8596.421804145682,
-      "transition_stability": 0.8896366083445492,
+      "log_likelihood": -4071.842595224713,
+      "transition_stability": 0.9126344086021505,
       "regime_distribution": {
-        "ranging": 5.359301942902956e-06,
-        "low_volatility": 0.9965834879243284,
-        "bull": 0.0026120080411333045,
-        "high_volatility": 1.2855781170221636e-06,
-        "bear": 0.0007978591544775789
+        "high_volatility": 1.164112096590764e-06,
+        "bull": 8.38569416509525e-06,
+        "ranging": 0.9875936662966222,
+        "low_volatility": 7.040945378924367e-05,
+        "bear": 0.012326374443202648
       }
     },
     {
@@ -118,14 +118,14 @@
       "train_end": "2025-01-29T13:00:00",
       "val_start": "2025-01-29T13:00:00",
       "val_end": "2025-02-28T13:00:00",
-      "log_likelihood": 8408.040248428628,
-      "transition_stability": 0.9125,
+      "log_likelihood": -3730.9773707610984,
+      "transition_stability": 0.9111111111111111,
       "regime_distribution": {
-        "low_volatility": 0.0,
-        "ranging": 3.221746334191044e-10,
-        "bull": 1.5145194726824653e-10,
-        "high_volatility": 0.9999999995252438,
-        "bear": 1.25786020009587e-12
+        "low_volatility": 1.5606939500564324e-75,
+        "high_volatility": 0.9999998210560239,
+        "bear": 2.6661958076307677e-20,
+        "bull": 1.7894382497092016e-07,
+        "ranging": 5.339539910207424e-48
       }
     },
     {
@@ -133,14 +133,14 @@
       "train_end": "2025-02-28T13:00:00",
       "val_start": "2025-02-28T13:00:00",
       "val_end": "2025-03-28T13:00:00",
-      "log_likelihood": 7592.774946804464,
-      "transition_stability": 0.9107142857142857,
+      "log_likelihood": -4104.604588140025,
+      "transition_stability": 0.9226190476190477,
       "regime_distribution": {
-        "bull": 1.2933258353697752e-203,
-        "bear": 1.5459457270191921e-06,
-        "ranging": 1.0456497033217543e-11,
-        "high_volatility": 0.000217392637843473,
-        "low_volatility": 0.9997810614057939
+        "bull": 3.6247089099060644e-09,
+        "bear": 0.9994381778753456,
+        "low_volatility": 0.00022037733530790488,
+        "ranging": 2.2263065740394638e-05,
+        "high_volatility": 0.00031917809874413904
       }
     },
     {
@@ -148,14 +148,14 @@
       "train_end": "2025-03-29T13:00:00",
       "val_start": "2025-03-29T13:00:00",
       "val_end": "2025-04-29T13:00:00",
-      "log_likelihood": 8881.54802824322,
-      "transition_stability": 0.918010752688172,
+      "log_likelihood": -3544.0425511595613,
+      "transition_stability": 0.9206989247311828,
       "regime_distribution": {
-        "ranging": 0.0,
-        "low_volatility": 0.9976355884891486,
-        "bull": 0.0022990523600918077,
-        "bear": 6.535335395151825e-05,
-        "high_volatility": 5.7965195766278245e-09
+        "bear": 0.0014027864177743317,
+        "ranging": 7.350892163425943e-05,
+        "high_volatility": 6.726497198620431e-08,
+        "low_volatility": 0.9985236174633966,
+        "bull": 1.9932299430363665e-08
       }
     },
     {
@@ -163,14 +163,14 @@
       "train_end": "2025-04-29T13:00:00",
       "val_start": "2025-04-29T13:00:00",
       "val_end": "2025-05-29T13:00:00",
-      "log_likelihood": 9160.877319459356,
-      "transition_stability": 0.8902777777777777,
+      "log_likelihood": -2834.707632717552,
+      "transition_stability": 0.8972222222222223,
       "regime_distribution": {
-        "bear": 1.1412861637314735e-26,
-        "ranging": 0.8852621280656479,
-        "high_volatility": 1.0725344330948938e-07,
-        "bull": 0.019276418783270074,
-        "low_volatility": 0.09546134589744593
+        "bear": 0.001544617487545666,
+        "ranging": 2.7559653317843837e-07,
+        "bull": 9.3779178044044e-11,
+        "high_volatility": 4.068618415205429e-09,
+        "low_volatility": 0.9984551027535169
       }
     },
     {
@@ -178,14 +178,14 @@
       "train_end": "2025-05-29T13:00:00",
       "val_start": "2025-05-29T13:00:00",
       "val_end": "2025-06-29T13:00:00",
-      "log_likelihood": 9181.604775348958,
-      "transition_stability": 0.842741935483871,
+      "log_likelihood": -3148.5707933662243,
+      "transition_stability": 0.9126344086021505,
       "regime_distribution": {
-        "bull": 2.7786694946957185e-17,
-        "low_volatility": 9.750621403748477e-14,
-        "ranging": 0.12667368918075514,
-        "bear": 0.8733263108187763,
-        "high_volatility": 5.41505387038551e-13
+        "high_volatility": 0.0009595188927538514,
+        "bear": 0.9973458410681347,
+        "bull": 1.8393700298075043e-08,
+        "low_volatility": 0.0016946216450898128,
+        "ranging": 1.5729028344349148e-13
       }
     },
     {
@@ -193,14 +193,14 @@
       "train_end": "2025-06-29T13:00:00",
       "val_start": "2025-06-29T13:00:00",
       "val_end": "2025-07-29T13:00:00",
-      "log_likelihood": 9036.598802507606,
-      "transition_stability": 0.8236111111111111,
+      "log_likelihood": -2915.5024338272974,
+      "transition_stability": 0.9041666666666667,
       "regime_distribution": {
-        "low_volatility": 0.9553497001853359,
-        "bear": 0.04464816382687393,
-        "high_volatility": 2.043335974961979e-06,
-        "bull": 2.1678724380630857e-10,
-        "ranging": 9.24351129274574e-08
+        "high_volatility": 9.906134373119167e-09,
+        "bull": 2.1109367994359364e-11,
+        "ranging": 7.096325042971741e-05,
+        "bear": 0.0035333839357620184,
+        "low_volatility": 0.996395642886535
       }
     },
     {
@@ -208,14 +208,14 @@
       "train_end": "2025-07-29T13:00:00",
       "val_start": "2025-07-29T13:00:00",
       "val_end": "2025-08-29T13:00:00",
-      "log_likelihood": 9530.656415101388,
-      "transition_stability": 0.896505376344086,
+      "log_likelihood": -3122.543181060264,
+      "transition_stability": 0.8924731182795699,
       "regime_distribution": {
-        "low_volatility": 0.000869393000797188,
-        "bear": 0.999024148898804,
-        "high_volatility": 0.00010616955304481283,
-        "bull": 2.8854776345437575e-07,
-        "ranging": 1.0184157275669898e-18
+        "bear": 0.00013044365305716864,
+        "bull": 6.534589669670777e-16,
+        "high_volatility": 1.131699061380546e-06,
+        "low_volatility": 0.0002624398547506298,
+        "ranging": 0.999605984793022
       }
     },
     {
@@ -223,14 +223,14 @@
       "train_end": "2025-08-28T13:00:00",
       "val_start": "2025-08-28T13:00:00",
       "val_end": "2025-09-28T13:00:00",
-      "log_likelihood": 9607.852002287485,
-      "transition_stability": 0.8844086021505376,
+      "log_likelihood": -3049.906462621983,
+      "transition_stability": 0.8924731182795699,
       "regime_distribution": {
-        "ranging": 0.0,
-        "low_volatility": 0.9605665855611382,
-        "bull": 0.0007593965246896699,
-        "high_volatility": 9.018128212502035e-07,
-        "bear": 0.03867311610131614
+        "high_volatility": 1.0001614981364119e-10,
+        "low_volatility": 0.9998986845366993,
+        "bear": 1.1761860875104437e-11,
+        "bull": 5.325716553588734e-12,
+        "ranging": 0.00010131534629523525
       }
     },
     {
@@ -238,14 +238,14 @@
       "train_end": "2025-09-28T13:00:00",
       "val_start": "2025-09-28T13:00:00",
       "val_end": "2025-10-28T13:00:00",
-      "log_likelihood": 8538.425162570971,
-      "transition_stability": 0.8888888888888888,
+      "log_likelihood": -4679.693950954339,
+      "transition_stability": 0.8861111111111111,
       "regime_distribution": {
-        "bear": 0.0029385225681929886,
-        "low_volatility": 0.9960522895775968,
-        "ranging": 1.177499016368785e-06,
-        "high_volatility": 2.649379936739937e-07,
-        "bull": 0.0010077454169740284
+        "bull": 2.8135788952482114e-06,
+        "low_volatility": 0.15117270069612315,
+        "ranging": 0.3136372662426715,
+        "bear": 0.5351779877290689,
+        "high_volatility": 9.231753459206525e-06
       }
     },
     {
@@ -253,14 +253,14 @@
       "train_end": "2025-10-28T13:00:00",
       "val_start": "2025-10-28T13:00:00",
       "val_end": "2025-11-28T13:00:00",
-      "log_likelihood": 7994.31228800375,
-      "transition_stability": 0.853494623655914,
+      "log_likelihood": -5650.873582034995,
+      "transition_stability": 0.9126344086021505,
       "regime_distribution": {
-        "bear": 0.0009103449718578081,
-        "ranging": 0.01251496787008324,
-        "low_volatility": 0.31197138647524914,
-        "high_volatility": 4.663141194272255e-34,
-        "bull": 0.6746033006824422
+        "bull": 0.5279569447394278,
+        "bear": 0.3983232790641145,
+        "ranging": 0.0722420385534081,
+        "low_volatility": 0.00022557065758008709,
+        "high_volatility": 0.0012521669856207917
       }
     },
     {
@@ -268,14 +268,14 @@
       "train_end": "2025-11-28T13:00:00",
       "val_start": "2025-11-28T13:00:00",
       "val_end": "2025-12-28T13:00:00",
-      "log_likelihood": 8209.110648791455,
-      "transition_stability": 0.8680555555555556,
+      "log_likelihood": -4902.384896372365,
+      "transition_stability": 0.8972222222222223,
       "regime_distribution": {
-        "bull": 5.440917598191621e-13,
-        "ranging": 0.15200625403513582,
-        "bear": 0.0011461239781629354,
-        "high_volatility": 5.111359485145978e-05,
-        "low_volatility": 0.846796508391734
+        "low_volatility": 0.9988365283576315,
+        "bear": 5.179163643324065e-15,
+        "ranging": 2.215933894504802e-08,
+        "high_volatility": 3.064413133058854e-11,
+        "bull": 0.001163449452547058
       }
     }
   ]

@@ -16,14 +16,72 @@ import (
 	"github.com/kasyap/delta-go/go/pkg/strategy"
 )
 
+// SignalFilter applies additional filters before trade execution
+type SignalFilter struct {
+	ti *strategy.TechnicalIndicators
+}
+
+// NewSignalFilter creates a new signal filter
+func NewSignalFilter() *SignalFilter {
+	return &SignalFilter{ti: &strategy.TechnicalIndicators{}}
+}
+
+// ShouldTrade applies 4H filter and long restrictions (matching Python backtest)
+func (sf *SignalFilter) ShouldTrade(signal strategy.Signal, candles []delta.Candle, regime delta.MarketRegime) (bool, string) {
+	if signal.Action == strategy.ActionNone {
+		return false, "no signal"
+	}
+
+	// Extract closes for calculations
+	closes := make([]float64, len(candles))
+	for i, c := range candles {
+		closes[i] = c.Close
+	}
+
+	// 4H multi-timeframe filter (only for high_volatility regime)
+	if regime == delta.RegimeHighVol && len(closes) >= 80 {
+		// Sample every 4th candle to simulate 4H from 1H data
+		closes4H := make([]float64, 0, len(closes)/4)
+		for i := 0; i < len(closes); i += 4 {
+			closes4H = append(closes4H, closes[i])
+		}
+
+		if len(closes4H) >= 20 {
+			ema20 := sf.ti.EMALast(closes4H, 20)
+			current4H := closes4H[len(closes4H)-1]
+			trendUp := current4H > ema20
+
+			if signal.Side == "buy" && !trendUp {
+				return false, "4H trend down, skipping long in high_vol"
+			}
+			if signal.Side == "sell" && trendUp {
+				return false, "4H trend up, skipping short in high_vol"
+			}
+		}
+	}
+
+	// Stricter long entry criteria (longs underperform historically)
+	if signal.Side == "buy" {
+		if signal.Confidence < 0.70 {
+			return false, fmt.Sprintf("long confidence %.2f < 0.70 threshold", signal.Confidence)
+		}
+		if regime == delta.RegimeBear {
+			return false, "no longs in bear regime"
+		}
+	}
+
+	return true, ""
+}
+
 // TradingBot is the main bot orchestrator
 type TradingBot struct {
-	cfg         *config.Config
-	deltaClient *delta.Client
-	wsClient    *delta.WebSocketClient
-	hmmClient   *delta.HMMClient
-	riskManager *risk.RiskManager
-	strategyMgr *strategy.Manager
+	cfg          *config.Config
+	deltaClient  *delta.Client
+	wsClient     *delta.WebSocketClient
+	hmmClient    *delta.HMMClient
+	riskManager  *risk.RiskManager
+	strategyMgr  *strategy.Manager
+	signalFilter *SignalFilter
 
 	// State
 	mu             sync.RWMutex
@@ -44,6 +102,7 @@ func NewTradingBot(cfg *config.Config) *TradingBot {
 		hmmClient:     delta.NewHMMClient(cfg.HMMEndpoint),
 		riskManager:   risk.NewRiskManager(cfg),
 		strategyMgr:   strategy.NewManager(),
+		signalFilter:  NewSignalFilter(),
 		currentRegime: delta.RegimeRanging,
 		candles:       make([]delta.Candle, 0),
 		stopChan:      make(chan struct{}),
@@ -194,6 +253,12 @@ func (bot *TradingBot) tradingCycle() {
 		return
 	}
 
+	// Apply 4H filter and long restrictions (matching Python backtest)
+	if canTrade, filterReason := bot.signalFilter.ShouldTrade(signal, candles, regime); !canTrade {
+		log.Printf("Signal filtered: %s", filterReason)
+		return
+	}
+
 	log.Printf("Signal: %s (Side: %s, Confidence: %.2f, Reason: %s)",
 		signal.Action, signal.Side, signal.Confidence, signal.Reason)
 
@@ -252,12 +317,25 @@ func (bot *TradingBot) multiAssetTradingCycle() {
 		return
 	}
 
+	// Build asset lookup for candles
+	assetMap := make(map[string]strategy.AssetData)
+	for _, a := range assets {
+		assetMap[a.Symbol] = a
+	}
+
 	// Create aggregator and find best signal
 	aggregator := strategy.NewSignalAggregator(bot.strategyMgr)
 	bestSignal := aggregator.SelectBestSignal(assets)
 
 	if bestSignal == nil {
 		log.Println("No qualifying signals found across all assets")
+		return
+	}
+
+	// Apply 4H filter and long restrictions (matching Python backtest)
+	assetData := assetMap[bestSignal.Symbol]
+	if canTrade, filterReason := bot.signalFilter.ShouldTrade(bestSignal.Signal, assetData.Candles, bestSignal.Regime); !canTrade {
+		log.Printf("Signal filtered for %s: %s", bestSignal.Symbol, filterReason)
 		return
 	}
 

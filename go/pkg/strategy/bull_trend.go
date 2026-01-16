@@ -24,10 +24,10 @@ func NewBullTrendStrategy() *BullTrendStrategy {
 		indicators:    NewIndicators(),
 		FastEMA:       20,
 		SlowEMA:       50,
-		RSILow:        40,
-		RSIHigh:       55,
-		ATRMultiplier: 2.0,
-		VolumeRatio:   1.0, // At least average volume
+		RSILow:        30,  // Deeper pullback (was 35)
+		RSIHigh:       45,  // Avoid late entries (was 50)
+		ATRMultiplier: 3.0, // Wider stops (was 2.5)
+		VolumeRatio:   1.2,
 	}
 }
 
@@ -80,6 +80,12 @@ func (s *BullTrendStrategy) Analyze(candles []delta.Candle, regime delta.MarketR
 	currOpen := candles[n-1].Open
 	bullishCandle := currClose > currOpen && currClose > prevClose
 
+	// Check for consecutive bullish candles (require 2+)
+	prevPrevClose := closes[n-3]
+	prevOpen := candles[n-2].Open
+	prevBullish := prevClose > prevOpen && prevClose > prevPrevClose
+	consecutiveBullish := bullishCandle && prevBullish
+
 	// Entry conditions for Bull Trend Following:
 	// 1. Price pulled back near 20EMA (within 0.5% of EMA)
 	// 2. RSI between 40-55 (not overbought, showing pullback)
@@ -104,8 +110,8 @@ func (s *BullTrendStrategy) Analyze(candles []delta.Candle, regime delta.MarketR
 		}
 	}
 
-	// Entry signal
-	if trendUp && nearEMA20 && rsiInRange && bullishCandle && volumeOK {
+	// Entry signal - require consecutive bullish candles
+	if trendUp && nearEMA20 && rsiInRange && consecutiveBullish && volumeOK {
 		stopLoss := currentPrice - (s.ATRMultiplier * currentATR)
 		// Also consider below pullback low
 		recentLow := minSlice(lows[n-5:]...)
@@ -113,7 +119,7 @@ func (s *BullTrendStrategy) Analyze(candles []delta.Candle, regime delta.MarketR
 			stopLoss = recentLow - (0.001 * currentPrice) // Just below recent low
 		}
 
-		takeProfit := currentPrice + (3.0 * currentATR) // 3x ATR trailing
+		takeProfit := currentPrice + (4.0 * currentATR) // 4x ATR for better R:R
 
 		return Signal{
 			Action:     ActionBuy,

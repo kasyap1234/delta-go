@@ -44,14 +44,14 @@ class HMMMarketDetector:
         4: "low_volatility"
     }
     
-    def __init__(self, n_states: int = 5, lookback: int = 100, n_restarts: int = 10):
+    def __init__(self, n_states: int = 5, lookback: int = 100, n_restarts: int = 20):
         """
         Initialize the HMM detector.
         
         Args:
             n_states: Number of hidden states (market regimes)
             lookback: Number of periods for rolling calculations
-            n_restarts: Number of random restarts for training
+            n_restarts: Number of random restarts for training (more = better but slower)
         """
         self.n_states = n_states
         self.lookback = lookback
@@ -188,13 +188,22 @@ class HMMMarketDetector:
         elif self.scaler is not None:
             features = self.scaler.transform(features)
         
+        # Clip outliers to ±3 standard deviations to prevent extreme values
+        # from distorting the HMM learning process
+        features = np.clip(features, -3.0, 3.0)
+        
         return features
     
-    def _init_means_with_kmeans(self, features: np.ndarray) -> np.ndarray:
-        """Initialize means using K-Means clustering for better starting points."""
+    def _init_means_with_kmeans(self, features: np.ndarray, random_state: int = 42) -> np.ndarray:
+        """Initialize means using K-Means clustering for better starting points.
+        
+        Args:
+            features: Feature matrix for clustering
+            random_state: Random seed for K-Means (use different seeds per restart)
+        """
         kmeans = KMeans(
             n_clusters=self.n_states,
-            random_state=42,
+            random_state=random_state,
             n_init=10,
             max_iter=300
         )
@@ -211,20 +220,25 @@ class HMMMarketDetector:
         best_model = None
         best_score = -np.inf
         
-        # Get K-Means initialized means for better starting points
-        kmeans_means = self._init_means_with_kmeans(features)
+        # Note: K-Means means are now computed inside each restart loop
+        # with different random seeds to provide diverse starting points
         
         for restart in range(self.n_restarts):
             try:
+                # Get K-Means initialized means with different seed per restart
+                # This provides diversity across restarts to escape local optima
+                kmeans_means = self._init_means_with_kmeans(features, random_state=restart * 7 + 42)
+                
                 model = GaussianHMM(
                     n_components=self.n_states,
-                    covariance_type="full",
-                    n_iter=500,  # Increased from 100
-                    tol=1e-4,
+                    covariance_type="tied",  # Tied is more stable than full
+                    n_iter=1000,  # Increased for better convergence
+                    tol=1e-6,  # Tighter tolerance
                     random_state=restart,
                     init_params="stc",  # Don't init means, we set them
                     params="stmc",  # But update all during training
                     verbose=False,
+                    min_covar=1e-1,  # Strong regularization to prevent regime collapse
                 )
                 
                 # Set K-Means initialized means
@@ -247,8 +261,9 @@ class HMMMarketDetector:
             best_model = GaussianHMM(
                 n_components=self.n_states,
                 covariance_type="diag",  # Simpler, more stable
-                n_iter=500,
+                n_iter=1000,
                 random_state=42,
+                min_covar=1e-1,  # Strong regularization for fallback too
             )
             best_model.fit(features)
         

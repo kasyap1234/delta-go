@@ -258,7 +258,7 @@ def main():
     parser.add_argument('--val-months', type=int, default=1, help='Validation window months')
     parser.add_argument('--step-months', type=int, default=1, help='Roll forward months')
     parser.add_argument('--n-states', type=int, default=5, help='Number of HMM states')
-    parser.add_argument('--output-dir', type=str, default='../../models', help='Output directory')
+    parser.add_argument('--output-dir', type=str, default='../models', help='Output directory')
     parser.add_argument('--csv', type=str, default=None, help='Load data from CSV instead of API')
     
     args = parser.parse_args()

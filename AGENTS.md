@@ -25,9 +25,17 @@ uv run python backtest.py --symbols BTCUSD,ETHUSD,SOLUSD
 ```
 
 ### Cloud Function
+
+**HMM Detector** (Market regime detection):
 ```bash
 # Build from repo root (required for shared library access)
 docker build -t hmm-detector -f cloud_function/Dockerfile .
+```
+
+**Trade Predictor** (XGBoost-based trade signal prediction):
+```bash
+# Build from repo root
+docker build -t trade-predictor -f cloud_function/trade_predictor/Dockerfile .
 ```
 
 ## Project Structure
@@ -36,8 +44,10 @@ docker build -t hmm-detector -f cloud_function/Dockerfile .
 - `python/regime_ml/` - Shared ML library (HMM detector, data fetcher)
 - `python/training/` - Model training scripts
 - `python/backtest/` - Backtesting engine
-- `cloud_function/` - GCP Cloud Run deployment
-- `models/` - Trained HMM model artifacts (.pkl)
+- `cloud_function/` - GCP Cloud Run deployments
+  - `app/` - HMM market regime detector
+  - `trade_predictor/` - XGBoost trade signal predictor
+- `models/` - Trained HMM model artifacts (.pkl) and trade prediction models
 
 ## Code Style
 

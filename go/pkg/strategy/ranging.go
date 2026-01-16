@@ -24,8 +24,8 @@ func NewRangingStrategy() *RangingStrategy {
 	return &RangingStrategy{
 		indicators:       NewIndicators(),
 		LookbackPeriod:   50,
-		RSIOversold:      30,
-		RSIOverbought:    70,
+		RSIOversold:      25, // Tightened from 30 for stronger bounce signals
+		RSIOverbought:    75, // Tightened from 70 for stronger fade signals
 		RangeConfirmBars: 10,
 	}
 }
@@ -61,9 +61,9 @@ func (s *RangingStrategy) Analyze(candles []delta.Candle, regime delta.MarketReg
 	support, resistance := s.findSupportResistance(highs, lows, closes)
 	rangeSize := resistance - support
 
-	// Validate range exists and is meaningful
-	if rangeSize <= 0 || rangeSize/currentPrice < 0.01 {
-		return Signal{Action: ActionNone, Reason: "no clear range identified"}
+	// Validate range exists and is meaningful (minimum 2% range)
+	if rangeSize <= 0 || rangeSize/currentPrice < 0.02 {
+		return Signal{Action: ActionNone, Reason: "range too small (< 2%)"}
 	}
 
 	// Check if price has been ranging (staying within S/R)
@@ -76,12 +76,15 @@ func (s *RangingStrategy) Analyze(candles []delta.Candle, regime delta.MarketReg
 	distToSupport := (currentPrice - support) / rangeSize
 	distToResistance := (resistance - currentPrice) / rangeSize
 
-	middleOfRange := support + (rangeSize / 2)
+	// Calculate Bollinger Bands for additional confirmation
+	upper, _, lower := s.indicators.BollingerBands(closes, 20, 2.0)
+	currentUpper := upper[n-1]
+	currentLower := lower[n-1]
 
-	// Entry at support (buy)
-	if distToSupport < 0.15 && currentRSI < s.RSIOversold {
-		stopLoss := support - (rangeSize * 0.1) // Stop beyond range
-		takeProfit := middleOfRange             // Target middle or resistance
+	// Entry at support (buy) - require price below lower BB
+	if distToSupport < 0.10 && currentRSI < s.RSIOversold && currentPrice <= currentLower {
+		stopLoss := support - (rangeSize * 0.1)   // Stop beyond range
+		takeProfit := support + (rangeSize * 0.7) // 70% of range target
 
 		return Signal{
 			Action:     ActionBuy,
@@ -90,14 +93,14 @@ func (s *RangingStrategy) Analyze(candles []delta.Candle, regime delta.MarketReg
 			Price:      currentPrice,
 			StopLoss:   stopLoss,
 			TakeProfit: takeProfit,
-			Reason:     "ranging: buy at support with RSI oversold",
+			Reason:     "ranging: buy at support with RSI oversold + below lower BB",
 		}
 	}
 
-	// Entry at resistance (sell)
-	if distToResistance < 0.15 && currentRSI > s.RSIOverbought {
-		stopLoss := resistance + (rangeSize * 0.1) // Stop beyond range
-		takeProfit := middleOfRange
+	// Entry at resistance (sell) - require price above upper BB
+	if distToResistance < 0.10 && currentRSI > s.RSIOverbought && currentPrice >= currentUpper {
+		stopLoss := resistance + (rangeSize * 0.1)   // Stop beyond range
+		takeProfit := resistance - (rangeSize * 0.7) // 70% of range target
 
 		return Signal{
 			Action:     ActionSell,
@@ -106,11 +109,11 @@ func (s *RangingStrategy) Analyze(candles []delta.Candle, regime delta.MarketReg
 			Price:      currentPrice,
 			StopLoss:   stopLoss,
 			TakeProfit: takeProfit,
-			Reason:     "ranging: sell at resistance with RSI overbought",
+			Reason:     "ranging: sell at resistance with RSI overbought + above upper BB",
 		}
 	}
 
-	return Signal{Action: ActionNone, Reason: "price not at range extremes"}
+	return Signal{Action: ActionNone, Reason: "price not at range extremes with BB confirmation"}
 }
 
 // findSupportResistance finds key S/R levels from recent price action

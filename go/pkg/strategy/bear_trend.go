@@ -25,9 +25,9 @@ func NewBearTrendStrategy() *BearTrendStrategy {
 		indicators:    NewIndicators(),
 		FastEMA:       20,
 		SlowEMA:       50,
-		RSILow:        45,
-		RSIHigh:       60,
-		ATRMultiplier: 2.0,
+		RSILow:        55,  // More overbought (was 50)
+		RSIHigh:       70,  // More extended rallies (was 65)
+		ATRMultiplier: 3.0, // Wider stops (was 2.5)
 		SafeMode:      false,
 	}
 }
@@ -86,6 +86,13 @@ func (s *BearTrendStrategy) Analyze(candles []delta.Candle, regime delta.MarketR
 	currOpen := candles[n-1].Open
 	bearishCandle := currClose < currOpen
 
+	// Check for consecutive bearish candles (require 2+)
+	prevClose := closes[n-2]
+	prevPrevClose := closes[n-3]
+	prevOpen := candles[n-2].Open
+	prevBearish := prevClose < prevOpen && prevClose < prevPrevClose
+	consecutiveBearish := bearishCandle && prevBearish
+
 	// Entry conditions for Bear Short:
 	// 1. Price rallied near 20EMA resistance (within 0.5%)
 	// 2. RSI between 45-60 (showing relief rally, not oversold)
@@ -110,8 +117,8 @@ func (s *BearTrendStrategy) Analyze(candles []delta.Candle, regime delta.MarketR
 		}
 	}
 
-	// Short entry signal
-	if trendDown && nearEMA20 && rsiInRange && bearishCandle && volumeOK {
+	// Short entry signal - require consecutive bearish candles
+	if trendDown && nearEMA20 && rsiInRange && consecutiveBearish && volumeOK {
 		// Find recent rally high for stop
 		recentHigh := maxSlice(highs[n-5:]...)
 		stopLoss := recentHigh + (0.001 * currentPrice) // Just above rally high
@@ -122,7 +129,7 @@ func (s *BearTrendStrategy) Analyze(candles []delta.Candle, regime delta.MarketR
 			stopLoss = atrStop
 		}
 
-		takeProfit := currentPrice - (3.0 * currentATR) // 3x ATR trailing
+		takeProfit := currentPrice - (4.0 * currentATR) // 4x ATR for better R:R
 
 		return Signal{
 			Action:     ActionSell,
