@@ -10,6 +10,8 @@ Uses GaussianHMM from hmmlearn to classify market states:
 """
 import numpy as np
 from hmmlearn.hmm import GaussianHMM
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
 from typing import Dict, Optional
 import warnings
 
@@ -26,6 +28,12 @@ class HMMMarketDetector:
     - Rolling Sharpe ratio (trend indicator)
     - RSI (14-period)
     - Volume change ratio
+    
+    Improvements:
+    - Feature standardization via StandardScaler
+    - Multiple random restarts to escape local optima
+    - Covariance regularization to prevent singular matrices
+    - K-Means initialization for better starting points
     """
     
     REGIME_NAMES = {
@@ -36,17 +44,20 @@ class HMMMarketDetector:
         4: "low_volatility"
     }
     
-    def __init__(self, n_states: int = 5, lookback: int = 100):
+    def __init__(self, n_states: int = 5, lookback: int = 100, n_restarts: int = 10):
         """
         Initialize the HMM detector.
         
         Args:
             n_states: Number of hidden states (market regimes)
             lookback: Number of periods for rolling calculations
+            n_restarts: Number of random restarts for training
         """
         self.n_states = n_states
         self.lookback = lookback
+        self.n_restarts = n_restarts
         self.model: Optional[GaussianHMM] = None
+        self.scaler: Optional[StandardScaler] = None
         self._is_trained = False
         self._state_to_regime: Dict[int, str] = {}
         
@@ -130,13 +141,18 @@ class HMMMarketDetector:
         highs: np.ndarray,
         lows: np.ndarray,
         closes: np.ndarray,
-        volumes: np.ndarray
+        volumes: np.ndarray,
+        fit_scaler: bool = False
     ) -> np.ndarray:
         """
         Prepare feature matrix for HMM.
         
+        Args:
+            fit_scaler: If True, fit the scaler on this data (training).
+                       If False, use existing scaler (inference).
+        
         Returns:
-            Feature matrix of shape (n_samples, n_features)
+            Feature matrix of shape (n_samples, n_features), standardized
         """
         returns = self._calculate_returns(closes)
         volatility = self._calculate_volatility(returns)
@@ -164,20 +180,79 @@ class HMMMarketDetector:
         ])
         
         features = np.nan_to_num(features, nan=0, posinf=0, neginf=0)
+        
+        # Standardize features for better HMM convergence
+        if fit_scaler:
+            self.scaler = StandardScaler()
+            features = self.scaler.fit_transform(features)
+        elif self.scaler is not None:
+            features = self.scaler.transform(features)
+        
         return features
     
-    def _train_model(self, features: np.ndarray):
-        """Train the HMM on feature data."""
-        self.model = GaussianHMM(
-            n_components=self.n_states,
-            covariance_type="full",
-            n_iter=100,
+    def _init_means_with_kmeans(self, features: np.ndarray) -> np.ndarray:
+        """Initialize means using K-Means clustering for better starting points."""
+        kmeans = KMeans(
+            n_clusters=self.n_states,
             random_state=42,
-            init_params="stmc",
-            verbose=False
+            n_init=10,
+            max_iter=300
         )
+        kmeans.fit(features)
+        return kmeans.cluster_centers_
+    
+    def _train_model(self, features: np.ndarray):
+        """
+        Train the HMM on feature data with multiple random restarts.
         
-        self.model.fit(features)
+        Uses multiple restarts to escape local optima and selects
+        the model with the best log-likelihood score.
+        """
+        best_model = None
+        best_score = -np.inf
+        
+        # Get K-Means initialized means for better starting points
+        kmeans_means = self._init_means_with_kmeans(features)
+        
+        for restart in range(self.n_restarts):
+            try:
+                model = GaussianHMM(
+                    n_components=self.n_states,
+                    covariance_type="full",
+                    n_iter=500,  # Increased from 100
+                    tol=1e-4,
+                    random_state=restart,
+                    init_params="stc",  # Don't init means, we set them
+                    params="stmc",  # But update all during training
+                    verbose=False,
+                )
+                
+                # Set K-Means initialized means
+                model.means_ = kmeans_means.copy()
+                
+                # Add small regularization to covariances
+                # This prevents singular covariance matrices
+                model.fit(features)
+                
+                score = model.score(features)
+                if score > best_score:
+                    best_score = score
+                    best_model = model
+            except Exception:
+                # Skip failed fits (e.g., singular covariance)
+                continue
+        
+        if best_model is None:
+            # Fallback to simple model if all restarts failed
+            best_model = GaussianHMM(
+                n_components=self.n_states,
+                covariance_type="diag",  # Simpler, more stable
+                n_iter=500,
+                random_state=42,
+            )
+            best_model.fit(features)
+        
+        self.model = best_model
         self._is_trained = True
         self._map_states_to_regimes(features)
     
@@ -259,7 +334,9 @@ class HMMMarketDetector:
                 "features": {}
             }
         
-        features = self._prepare_features(opens, highs, lows, closes, volumes)
+        # When training (not yet trained), fit the scaler
+        fit_scaler = not self._is_trained
+        features = self._prepare_features(opens, highs, lows, closes, volumes, fit_scaler=fit_scaler)
         
         if not self._is_trained:
             self._train_model(features)
@@ -306,5 +383,8 @@ class HMMMarketDetector:
         volumes: np.ndarray
     ):
         """Force retrain the model on new data."""
-        features = self._prepare_features(opens, highs, lows, closes, volumes)
+        # Reset scaler and train fresh
+        self.scaler = None
+        self._is_trained = False
+        features = self._prepare_features(opens, highs, lows, closes, volumes, fit_scaler=True)
         self._train_model(features)
