@@ -11,6 +11,7 @@ permissions:
 
 env:
   CLOUD_FUNCTION_NAME: hmm-detector
+  TRADE_PREDICTOR_NAME: trade-predictor
   CLOUD_FUNCTION_REGION: us-central1
   GCE_ZONE: us-central1-a
   GCE_MACHINE_TYPE: e2-micro
@@ -50,11 +51,50 @@ jobs:
           gcloud functions deploy "${{ env.CLOUD_FUNCTION_NAME }}" \
             --gen2 \
             --region "${{ env.CLOUD_FUNCTION_REGION }}" \
-            --runtime python312 \
+            --runtime python311 \
             --source ./gcf_src \
             --entry-point detect_regime \
             --trigger-http \
             --set-env-vars HMM_MODEL_DIR=models \
+            --allow-unauthenticated
+
+  deploy-trade-predictor:
+    name: Deploy Trade Predictor (gen2)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Stage function source
+        run: |
+          rm -rf ./gcf_trade_src
+          mkdir -p ./gcf_trade_src
+          cp cloud_function/trade_predictor/app/main.py ./gcf_trade_src/main.py
+          cp cloud_function/trade_predictor/requirements.txt ./gcf_trade_src/requirements.txt
+          mkdir -p ./gcf_trade_src/models
+          cp models/trade_predictor.pkl ./gcf_trade_src/models/
+
+      - name: Deploy function
+        run: |
+          gcloud functions deploy "${{ env.TRADE_PREDICTOR_NAME }}" \
+            --gen2 \
+            --region "${{ env.CLOUD_FUNCTION_REGION }}" \
+            --runtime python311 \
+            --source ./gcf_trade_src \
+            --entry-point predict_trade \
+            --trigger-http \
+            --set-env-vars TRADE_PREDICTOR_MODEL=models/trade_predictor.pkl \
             --allow-unauthenticated
 
   deploy-go-bot:
