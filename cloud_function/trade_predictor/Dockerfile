@@ -1,17 +1,17 @@
-FROM python:3.13-slim
+FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY cloud_function/trade_predictor/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app/ ./app/
+COPY cloud_function/trade_predictor/app/ ./app/
 
-# Create models directory
-RUN mkdir -p /app/models
+# Copy pre-trained trade predictor model
+COPY models/trade_predictor.pkl /app/models/trade_predictor.pkl
 
-ENV PORT=8082
+ENV PORT=8080
 ENV FUNCTION_TARGET=predict_trade
 ENV TRADE_PREDICTOR_MODEL=/app/models/trade_predictor.pkl
 
-CMD ["functions-framework", "--target=predict_trade", "--source=app/main.py", "--port=8082"]
+CMD exec functions-framework --target=predict_trade --source=app/main.py --port=$PORT
