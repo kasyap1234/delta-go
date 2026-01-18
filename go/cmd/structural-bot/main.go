@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"github.com/kasyap/delta-go/go/config"
 	"github.com/kasyap/delta-go/go/pkg/delta"
 	"github.com/kasyap/delta-go/go/pkg/features"
+	"github.com/kasyap/delta-go/go/pkg/logger"
 	"github.com/kasyap/delta-go/go/pkg/risk"
 	"github.com/kasyap/delta-go/go/pkg/strategy"
 )
@@ -758,11 +760,22 @@ func parseFloatOrZero(s string) float64 {
 }
 
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	log.Println("Delta Exchange Structural Trading Bot v2.0")
-	log.Println("Strategy: Real-time structural drivers (no ML)")
-
 	cfg := config.LoadConfig()
+
+	// Initialize structured logger
+	logCfg := logger.Config{
+		FilePath: cfg.LogPath,
+		Level:    cfg.LogLevel,
+	}
+	l, err := logger.New(logCfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize logger: %v", err)
+	}
+	slog.SetDefault(l)
+	// Disable standard log flags as slog handles them
+	log.SetFlags(0)
+
+	slog.Info("Delta Exchange Structural Trading Bot v2.0", "strategy", "Real-time structural drivers (no ML)")
 
 	if cfg.APIKey == "" || cfg.APISecret == "" {
 		log.Fatal("DELTA_API_KEY and DELTA_API_SECRET environment variables are required")

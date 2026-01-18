@@ -49,6 +49,10 @@ type Config struct {
 	// Intervals
 	CandleInterval    string        // "1m", "5m", "15m", etc.
 	RegimeCheckPeriod time.Duration // How often to check market regime
+
+	// Logging
+	LogPath  string
+	LogLevel string
 }
 
 // LoadConfig loads configuration from environment variables
@@ -89,6 +93,10 @@ func LoadConfig() *Config {
 		// Intervals
 		CandleInterval:    getEnv("CANDLE_INTERVAL", "5m"),
 		RegimeCheckPeriod: time.Duration(getEnvInt("REGIME_CHECK_SECONDS", 300)) * time.Second,
+
+		// Logging
+		LogPath:  getEnv("LOG_PATH", "bot.log"),
+		LogLevel: getEnv("LOG_LEVEL", "INFO"),
 	}
 
 	// Set URLs based on testnet flag
