@@ -2,13 +2,14 @@ package risk
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"sync"
 	"time"
 
 	"github.com/kasyap/delta-go/go/config"
 	"github.com/kasyap/delta-go/go/pkg/delta"
+	"github.com/kasyap/delta-go/go/pkg/logger"
 )
 
 // RiskManager handles position sizing and risk controls
@@ -57,7 +58,7 @@ func (rm *RiskManager) UpdateBalance(balance float64) {
 		rm.dailyStartBalance = balance
 		rm.dailyPnL = 0
 		rm.isDailyLimitHit = false
-		log.Printf("New trading day started. Daily balance reset to %.2f", balance)
+		slog.Info("New trading day started", "balance", balance)
 	}
 
 	// Initialize daily start balance if not set
@@ -76,8 +77,10 @@ func (rm *RiskManager) UpdateBalance(balance float64) {
 	if rm.dailyPnL <= rm.dailyLossLimit && !rm.isDailyLimitHit {
 		rm.isDailyLimitHit = true
 		rm.dailyLimitResetTime = today.Add(24 * time.Hour)
-		log.Printf("DAILY LOSS LIMIT HIT: Daily P&L %.2f%% exceeds limit %.2f%%. Trading paused until %v",
+		msg := fmt.Sprintf("DAILY LOSS LIMIT HIT: Daily P&L %.2f%% exceeds limit %.2f%%. Trading paused until %v",
 			rm.dailyPnL, rm.dailyLossLimit, rm.dailyLimitResetTime)
+		logger.ConsoleLog("ERROR", msg)
+		slog.Error("Daily loss limit hit", "pnl_pct", rm.dailyPnL, "limit_pct", rm.dailyLossLimit, "reset_at", rm.dailyLimitResetTime)
 	}
 
 	if balance > rm.peakBalance {
@@ -93,8 +96,10 @@ func (rm *RiskManager) UpdateBalance(balance float64) {
 		if !rm.isCircuitBroken {
 			rm.isCircuitBroken = true
 			rm.circuitBrokenAt = time.Now()
-			log.Printf("CIRCUIT BREAKER TRIGGERED: Drawdown %.2f%% exceeds max %.2f%%",
+			msg := fmt.Sprintf("CIRCUIT BREAKER TRIGGERED: Drawdown %.2f%% exceeds max %.2f%%",
 				rm.currentDrawdown, rm.cfg.MaxDrawdownPct)
+			logger.ConsoleLog("ERROR", msg)
+			slog.Error("Circuit breaker triggered", "drawdown_pct", rm.currentDrawdown, "max_drawdown_pct", rm.cfg.MaxDrawdownPct)
 		}
 	}
 }
@@ -111,7 +116,7 @@ func (rm *RiskManager) CanTrade() (bool, string) {
 			rm.isDailyLimitHit = false
 			rm.currentDay = time.Now().Truncate(24 * time.Hour)
 			rm.dailyPnL = 0
-			log.Printf("Daily limit reset - trading resumed")
+			slog.Info("Daily limit reset - trading resumed")
 			return true, ""
 		}
 		hoursRemaining := time.Until(rm.dailyLimitResetTime).Hours()
@@ -125,6 +130,7 @@ func (rm *RiskManager) CanTrade() (bool, string) {
 			rm.isCircuitBroken = false
 			rm.circuitBrokenAt = time.Time{}
 			rm.peakBalance = rm.currentBalance
+			slog.Info("Circuit breaker reset after timeout - trading resumed")
 			return true, ""
 		}
 		return false, fmt.Sprintf("circuit breaker active (%.1f hours remaining)",
@@ -218,7 +224,7 @@ func (rm *RiskManager) calculateMaxSize(balance float64, price float64, product 
 	// Use helper to convert notional to contracts
 	maxSize, err := delta.NotionalToContracts(maxNotional, price, product)
 	if err != nil {
-		log.Printf("Error calculating max size: %v", err)
+		slog.Error("Error calculating max size", "error", err)
 		return 0
 	}
 
@@ -324,5 +330,5 @@ func (rm *RiskManager) ResetCircuitBreaker() {
 	defer rm.mu.Unlock()
 	rm.isCircuitBroken = false
 	rm.peakBalance = rm.currentBalance
-	log.Println("Circuit breaker manually reset")
+	slog.Info("Circuit breaker manually reset")
 }
