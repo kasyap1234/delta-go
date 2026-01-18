@@ -19,7 +19,7 @@
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Visual CLI Enhancement' (Protocol in workflow.md)
 
 ## Phase 3: Integration and Health Checks
-- [ ] Task: Integrate monitoring with Risk Manager
-    - [ ] Write Tests: Verify risk violation logs are high-priority/distinct
-    - [ ] Implement Feature: Ensure risk manager events are captured by the new system
+- [x] Task: Integrate monitoring with Risk Manager 4d8db6e
+    - [x] Write Tests: Verify risk violation logs are high-priority/distinct
+    - [x] Implement Feature: Ensure risk manager events are captured by the new system
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Integration and Health Checks' (Protocol in workflow.md)
