@@ -18,8 +18,8 @@
     - [x] Implement Feature: Add a 'heartbeat' log every minute with current PnL and status
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Visual CLI Enhancement' (Protocol in workflow.md)
 
-## Phase 3: Integration and Health Checks
+## Phase 3: Integration and Health Checks [checkpoint: 7b9cd17]
 - [x] Task: Integrate monitoring with Risk Manager 4d8db6e
     - [x] Write Tests: Verify risk violation logs are high-priority/distinct
     - [x] Implement Feature: Ensure risk manager events are captured by the new system
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Integration and Health Checks' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Integration and Health Checks' (Protocol in workflow.md)
