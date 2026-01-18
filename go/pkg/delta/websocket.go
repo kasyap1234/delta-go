@@ -1,9 +1,12 @@
 package delta
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -26,10 +29,12 @@ type WebSocketClient struct {
 	subscriptions []subscription
 
 	// Callbacks
-	onTicker    func(Ticker)
-	onCandle    func(Candle)
-	onOrderbook func(json.RawMessage)
-	onError     func(error)
+	onTicker           func(Ticker)
+	onCandle           func(Candle)
+	onCandleWithSymbol func(symbol string, candle Candle) // Enhanced callback with symbol
+	onOrderbook        func(json.RawMessage)
+	onFundingRate      func(FundingRateUpdate)
+	onError            func(error)
 
 	// State
 	mu           sync.RWMutex
@@ -39,6 +44,13 @@ type WebSocketClient struct {
 	closeOnce    sync.Once
 	writeMu      sync.Mutex
 	started      bool
+}
+
+// FundingRateUpdate represents a funding rate update message
+type FundingRateUpdate struct {
+	Symbol      string  `json:"symbol"`
+	FundingRate float64 `json:"funding_rate"`
+	Timestamp   int64   `json:"timestamp"`
 }
 
 // WebSocketMessage represents a message from Delta Exchange WebSocket
@@ -69,9 +81,18 @@ func (ws *WebSocketClient) OnCandle(callback func(Candle)) {
 	ws.onCandle = callback
 }
 
+// OnCandleWithSymbol sets the candle callback with symbol context
+func (ws *WebSocketClient) OnCandleWithSymbol(callback func(symbol string, candle Candle)) {
+	ws.onCandleWithSymbol = callback
+}
+
 // OnOrderbook sets the orderbook callback
 func (ws *WebSocketClient) OnOrderbook(callback func(json.RawMessage)) {
 	ws.onOrderbook = callback
+}
+
+func (ws *WebSocketClient) OnFundingRate(callback func(FundingRateUpdate)) {
+	ws.onFundingRate = callback
 }
 
 // OnError sets the error callback
@@ -81,11 +102,34 @@ func (ws *WebSocketClient) OnError(callback func(error)) {
 
 // Connect establishes WebSocket connection
 func (ws *WebSocketClient) Connect() error {
-	dialer := websocket.DefaultDialer
-	dialer.HandshakeTimeout = 10 * time.Second
+	// Create custom TLS config that forces HTTP/1.1 (disables ALPN for HTTP/2)
+	// This is required because CDNs like CloudFront will negotiate HTTP/2 via ALPN
+	// but websocket upgrade requires HTTP/1.1
+	tlsConfig := &tls.Config{
+		NextProtos: []string{"http/1.1"}, // Force HTTP/1.1 only
+	}
 
-	conn, _, err := dialer.Dial(ws.url, nil)
+	dialer := &websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+		TLSClientConfig:  tlsConfig,
+	}
+
+	// Add Origin and User-Agent headers which many exchanges/CDNs require
+	// IMPORTANT: Origin must match the websocket host, not the REST API host
+	headers := make(http.Header)
+	if u, err := url.Parse(ws.url); err == nil {
+		headers.Add("Origin", "https://"+u.Host)
+	} else {
+		headers.Add("Origin", "https://india.delta.exchange")
+	}
+	headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	headers.Add("Accept-Language", "en-US,en;q=0.9")
+
+	conn, resp, err := dialer.Dial(ws.url, headers)
 	if err != nil {
+		if resp != nil {
+			return fmt.Errorf("websocket dial failed with status %d: %v", resp.StatusCode, err)
+		}
 		return fmt.Errorf("websocket dial failed: %v", err)
 	}
 
@@ -149,6 +193,10 @@ func (ws *WebSocketClient) SubscribeCandles(symbol, resolution string) error {
 // SubscribeOrderbook subscribes to L2 orderbook
 func (ws *WebSocketClient) SubscribeOrderbook(symbol string) error {
 	return ws.Subscribe("l2_orderbook", []string{symbol})
+}
+
+func (ws *WebSocketClient) SubscribeFundingRate(symbols []string) error {
+	return ws.Subscribe("funding_rate", symbols)
 }
 
 // sendSubscribe sends subscription message
@@ -233,10 +281,15 @@ func (ws *WebSocketClient) handleMessage(data []byte) {
 		}
 
 	case containsSubstr(msg.Type, "candlestick") || containsSubstr(msg.Channel, "candlestick"):
-		if ws.onCandle != nil {
+		if ws.onCandle != nil || ws.onCandleWithSymbol != nil {
 			var candle Candle
 			if err := json.Unmarshal(msg.Data, &candle); err == nil {
-				ws.onCandle(candle)
+				if ws.onCandle != nil {
+					ws.onCandle(candle)
+				}
+				if ws.onCandleWithSymbol != nil {
+					ws.onCandleWithSymbol(msg.Symbol, candle)
+				}
 			}
 		}
 

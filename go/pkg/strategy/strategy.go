@@ -341,9 +341,18 @@ func (ti *TechnicalIndicators) ATRLast(highs, lows, closes []float64, period int
 	return atr
 }
 
-// Helper functions using math stdlib
 func abs(x float64) float64 {
-	return math.Abs(x)
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+func oppositeSide(side string) string {
+	if side == "buy" {
+		return "sell"
+	}
+	return "buy"
 }
 
 func max(a, b float64) float64 {

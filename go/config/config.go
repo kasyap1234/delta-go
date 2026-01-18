@@ -24,8 +24,20 @@ type Config struct {
 	MaxPositionPct float64 // Max % of wallet to use per position
 	MultiAssetMode bool    // Enable multi-asset signal selection
 
-	// Cloud Run HMM
-	HMMEndpoint string
+	// Strategy Selection
+	ScalperEnabled    bool // Enable fee-free scalper strategy
+	BasisTradeEnabled bool // Enable basis trade monitoring
+
+	// Scalper Settings
+	ScalpImbalanceThreshold float64
+	ScalpPersistenceCount   int
+	ScalpTargetBps          float64
+	ScalpMaxLossBps         float64
+
+	// Basis Trade Settings
+	BasisEntryThreshold float64 // Annualized basis % to enter
+	BasisExitThreshold  float64 // Annualized basis % to exit
+	BasisMaxLeverage    int
 
 	// Risk Management
 	MaxDrawdownPct    float64
@@ -51,7 +63,21 @@ func LoadConfig() *Config {
 		Leverage:        getEnvInt("DELTA_LEVERAGE", 10),
 		MaxPositionPct:  getEnvFloat("DELTA_MAX_POSITION_PCT", 10.0),
 		MultiAssetMode:  getEnvBool("MULTI_ASSET_MODE", true),
-		HMMEndpoint:     getEnv("HMM_ENDPOINT", "http://localhost:8080"),
+
+		// Strategy settings
+		ScalperEnabled:    getEnvBool("SCALPER_ENABLED", true),
+		BasisTradeEnabled: getEnvBool("BASIS_TRADE_ENABLED", true),
+
+		// Scalper settings
+		ScalpImbalanceThreshold: getEnvFloat("SCALP_IMBALANCE_THRESHOLD", 0.5),
+		ScalpPersistenceCount:   getEnvInt("SCALP_PERSISTENCE_COUNT", 5),
+		ScalpTargetBps:          getEnvFloat("SCALP_TARGET_BPS", 20.0),
+		ScalpMaxLossBps:         getEnvFloat("SCALP_MAX_LOSS_BPS", 15.0),
+
+		// Basis trade settings
+		BasisEntryThreshold: getEnvFloat("BASIS_ENTRY_THRESHOLD", 0.15),
+		BasisExitThreshold:  getEnvFloat("BASIS_EXIT_THRESHOLD", 0.05),
+		BasisMaxLeverage:    getEnvInt("BASIS_MAX_LEVERAGE", 3),
 
 		// Risk defaults
 		MaxDrawdownPct:    getEnvFloat("MAX_DRAWDOWN_PCT", 10.0),

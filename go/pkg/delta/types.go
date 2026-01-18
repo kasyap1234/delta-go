@@ -31,17 +31,18 @@ type Asset struct {
 
 // Ticker represents real-time ticker data
 type Ticker struct {
-	Symbol    string  `json:"symbol"`
-	ProductID int     `json:"product_id"`
-	Close     float64 `json:"close,string"`
-	High      float64 `json:"high,string"`
-	Low       float64 `json:"low,string"`
-	MarkPrice float64 `json:"mark_price,string"`
-	Open      float64 `json:"open,string"`
-	Size      float64 `json:"size"`
-	Timestamp int64   `json:"timestamp"`
-	Turnover  float64 `json:"turnover,string"`
-	Volume    float64 `json:"volume"`
+	Symbol      string  `json:"symbol"`
+	ProductID   int     `json:"product_id"`
+	Close       float64 `json:"close,string"`
+	High        float64 `json:"high,string"`
+	Low         float64 `json:"low,string"`
+	MarkPrice   float64 `json:"mark_price,string"`
+	Open        float64 `json:"open,string"`
+	Size        float64 `json:"size"`
+	Timestamp   int64   `json:"timestamp"`
+	Turnover    float64 `json:"turnover,string"`
+	Volume      float64 `json:"volume"`
+	FundingRate float64 `json:"funding_rate,string"` // 8-hourly funding rate for perpetuals
 }
 
 // Candle represents OHLCV data
@@ -135,7 +136,7 @@ type OrderRequest struct {
 	BracketTakeProfitLimitPrice string `json:"bracket_take_profit_limit_price,omitempty"`
 }
 
-// MarketRegime represents the detected market regime from HMM
+// MarketRegime represents market state (legacy, kept for compatibility)
 type MarketRegime string
 
 const (
@@ -145,14 +146,3 @@ const (
 	RegimeHighVol MarketRegime = "high_volatility"
 	RegimeLowVol  MarketRegime = "low_volatility"
 )
-
-// HMMResponse represents the response from the HMM Cloud Run function
-type HMMResponse struct {
-	Regime     MarketRegime `json:"regime"`
-	Confidence float64      `json:"confidence"`
-	Features   struct {
-		Volatility float64 `json:"volatility"`
-		Trend      float64 `json:"trend"`
-		RSI        float64 `json:"rsi"`
-	} `json:"features"`
-}

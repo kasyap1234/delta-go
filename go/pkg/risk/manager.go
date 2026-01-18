@@ -115,7 +115,7 @@ func (rm *RiskManager) CanTrade() (bool, string) {
 			log.Printf("Daily limit reset - trading resumed")
 			return true, ""
 		}
-		hoursRemaining := rm.dailyLimitResetTime.Sub(time.Now()).Hours()
+		hoursRemaining := time.Until(rm.dailyLimitResetTime).Hours()
 		return false, fmt.Sprintf("daily loss limit hit (%.2f%%), resets in %.1f hours",
 			rm.dailyPnL, hoursRemaining)
 	}
@@ -146,6 +146,10 @@ func (rm *RiskManager) CalculatePositionSize(
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
+	if balance <= 0 || entryPrice <= 0 {
+		return 0
+	}
+
 	// Base risk per trade
 	riskAmount := balance * (rm.cfg.RiskPerTradePct / 100)
 
@@ -153,31 +157,40 @@ func (rm *RiskManager) CalculatePositionSize(
 	regimeMultiplier := rm.getRegimeMultiplier(regime)
 	adjustedRisk := riskAmount * regimeMultiplier
 
-	// Calculate risk per contract
-	riskPerContract := math.Abs(entryPrice - stopLossPrice)
+	contractValue := 1.0
+	if product != nil && product.ContractValue != "" {
+		if cv, err := strconv.ParseFloat(product.ContractValue, 64); err == nil && cv > 0 {
+			contractValue = cv
+		}
+	}
+
+	// Calculate risk per contract (in settlement currency units)
+	riskPerContract := math.Abs(entryPrice-stopLossPrice) * contractValue
 	if riskPerContract <= 0 {
 		// Use default stop loss percentage if no stop provided
-		riskPerContract = entryPrice * (rm.cfg.StopLossPct / 100)
+		riskPerContract = entryPrice * (rm.cfg.StopLossPct / 100) * contractValue
+	}
+	if riskPerContract <= 0 {
+		return 0
 	}
 
 	// Calculate number of contracts
 	contracts := adjustedRisk / riskPerContract
-
-	// Apply leverage
-	contracts = contracts * float64(rm.cfg.Leverage)
 
 	// Round down to integer
 	size := int(math.Floor(contracts))
 
 	// Apply max position limit
 	maxSize := rm.calculateMaxSize(balance, entryPrice, product)
+	if maxSize < 1 {
+		return 0
+	}
 	if size > maxSize {
 		size = maxSize
 	}
 
-	// Minimum size
 	if size < 1 {
-		size = 1
+		return 0
 	}
 
 	return size

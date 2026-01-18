@@ -163,15 +163,10 @@ func RoundToTickSizeWithDirection(price float64, tickSize string, direction stri
 	}
 
 	precision := 0
-	if tick < 1 {
-		tickStr := strconv.FormatFloat(tick, 'f', -1, 64)
-		if idx := len(tickStr) - 1; idx > 0 {
-			for i := len(tickStr) - 1; i >= 0; i-- {
-				if tickStr[i] == '.' {
-					precision = len(tickStr) - 1 - i
-					break
-				}
-			}
+	for i := len(tickSize) - 1; i >= 0; i-- {
+		if tickSize[i] == '.' {
+			precision = len(tickSize) - 1 - i
+			break
 		}
 	}
 
