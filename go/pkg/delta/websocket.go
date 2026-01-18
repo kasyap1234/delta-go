@@ -11,6 +11,11 @@ import (
 	"github.com/kasyap/delta-go/go/config"
 )
 
+type subscription struct {
+	name    string
+	symbols []string
+}
+
 // WebSocketClient handles real-time market data from Delta Exchange
 type WebSocketClient struct {
 	cfg  *config.Config
@@ -18,7 +23,7 @@ type WebSocketClient struct {
 	url  string
 
 	// Subscriptions
-	subscriptions []string
+	subscriptions []subscription
 
 	// Callbacks
 	onTicker    func(Ticker)
@@ -31,6 +36,9 @@ type WebSocketClient struct {
 	isConnected  bool
 	stopChan     chan struct{}
 	reconnecting bool
+	closeOnce    sync.Once
+	writeMu      sync.Mutex
+	started      bool
 }
 
 // WebSocketMessage represents a message from Delta Exchange WebSocket
@@ -46,7 +54,7 @@ func NewWebSocketClient(cfg *config.Config) *WebSocketClient {
 	return &WebSocketClient{
 		cfg:           cfg,
 		url:           cfg.WebSocketURL,
-		subscriptions: []string{},
+		subscriptions: []subscription{},
 		stopChan:      make(chan struct{}),
 	}
 }
@@ -73,9 +81,6 @@ func (ws *WebSocketClient) OnError(callback func(error)) {
 
 // Connect establishes WebSocket connection
 func (ws *WebSocketClient) Connect() error {
-	ws.mu.Lock()
-	defer ws.mu.Unlock()
-
 	dialer := websocket.DefaultDialer
 	dialer.HandshakeTimeout = 10 * time.Second
 
@@ -84,18 +89,28 @@ func (ws *WebSocketClient) Connect() error {
 		return fmt.Errorf("websocket dial failed: %v", err)
 	}
 
+	ws.mu.Lock()
+	oldConn := ws.conn
 	ws.conn = conn
 	ws.isConnected = true
+	startLoops := !ws.started
+	ws.started = true
+	subs := make([]subscription, len(ws.subscriptions))
+	copy(subs, ws.subscriptions)
+	ws.mu.Unlock()
 
-	// Start message handler
-	go ws.readMessages()
+	if oldConn != nil {
+		_ = oldConn.Close()
+	}
 
-	// Start heartbeat
-	go ws.heartbeat()
+	if startLoops {
+		go ws.readMessages()
+		go ws.heartbeat()
+	}
 
 	// Resubscribe to channels
-	for _, sub := range ws.subscriptions {
-		ws.sendSubscribe(sub)
+	for _, sub := range subs {
+		_ = ws.sendSubscribe(sub)
 	}
 
 	log.Printf("WebSocket connected to %s", ws.url)
@@ -103,42 +118,51 @@ func (ws *WebSocketClient) Connect() error {
 }
 
 // Subscribe subscribes to a channel
-func (ws *WebSocketClient) Subscribe(channel string) error {
+func (ws *WebSocketClient) Subscribe(channel string, symbols []string) error {
 	ws.mu.Lock()
-	ws.subscriptions = append(ws.subscriptions, channel)
+	for _, existing := range ws.subscriptions {
+		if existing.name == channel && equalStringSlice(existing.symbols, symbols) {
+			ws.mu.Unlock()
+			return nil
+		}
+	}
+	ws.subscriptions = append(ws.subscriptions, subscription{name: channel, symbols: append([]string(nil), symbols...)})
+	isConnected := ws.isConnected
 	ws.mu.Unlock()
 
-	if ws.isConnected {
-		return ws.sendSubscribe(channel)
+	if isConnected {
+		return ws.sendSubscribe(subscription{name: channel, symbols: symbols})
 	}
 	return nil
 }
 
 // SubscribeTicker subscribes to ticker updates for a symbol
 func (ws *WebSocketClient) SubscribeTicker(symbol string) error {
-	channel := fmt.Sprintf("v2/ticker.%s", symbol)
-	return ws.Subscribe(channel)
+	return ws.Subscribe("v2/ticker", []string{symbol})
 }
 
 // SubscribeCandles subscribes to candle updates
 func (ws *WebSocketClient) SubscribeCandles(symbol, resolution string) error {
-	channel := fmt.Sprintf("candlestick_%s.%s", resolution, symbol)
-	return ws.Subscribe(channel)
+	return ws.Subscribe(fmt.Sprintf("candlestick_%s", resolution), []string{symbol})
 }
 
 // SubscribeOrderbook subscribes to L2 orderbook
 func (ws *WebSocketClient) SubscribeOrderbook(symbol string) error {
-	channel := fmt.Sprintf("l2_orderbook.%s", symbol)
-	return ws.Subscribe(channel)
+	return ws.Subscribe("l2_orderbook", []string{symbol})
 }
 
 // sendSubscribe sends subscription message
-func (ws *WebSocketClient) sendSubscribe(channel string) error {
+func (ws *WebSocketClient) sendSubscribe(sub subscription) error {
+	var symbolsPayload interface{} = "all"
+	if len(sub.symbols) > 0 {
+		symbolsPayload = sub.symbols
+	}
+
 	msg := map[string]interface{}{
 		"type": "subscribe",
 		"payload": map[string]interface{}{
-			"channels": []map[string]string{
-				{"name": channel},
+			"channels": []map[string]interface{}{
+				{"name": sub.name, "symbols": symbolsPayload},
 			},
 		},
 	}
@@ -149,13 +173,16 @@ func (ws *WebSocketClient) sendSubscribe(channel string) error {
 // sendJSON sends a JSON message
 func (ws *WebSocketClient) sendJSON(msg interface{}) error {
 	ws.mu.RLock()
-	defer ws.mu.RUnlock()
-
 	if ws.conn == nil {
+		ws.mu.RUnlock()
 		return fmt.Errorf("websocket not connected")
 	}
+	conn := ws.conn
+	ws.mu.RUnlock()
 
-	return ws.conn.WriteJSON(msg)
+	ws.writeMu.Lock()
+	defer ws.writeMu.Unlock()
+	return conn.WriteJSON(msg)
 }
 
 // readMessages handles incoming WebSocket messages
@@ -165,21 +192,22 @@ func (ws *WebSocketClient) readMessages() {
 		case <-ws.stopChan:
 			return
 		default:
-			if ws.conn == nil {
+			ws.mu.RLock()
+			conn := ws.conn
+			ws.mu.RUnlock()
+			if conn == nil {
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
 
-			_, message, err := ws.conn.ReadMessage()
+			_, message, err := conn.ReadMessage()
 			if err != nil {
-				if !ws.reconnecting {
-					log.Printf("WebSocket read error: %v", err)
-					if ws.onError != nil {
-						ws.onError(err)
-					}
-					ws.reconnect()
+				log.Printf("WebSocket read error: %v", err)
+				if ws.onError != nil {
+					ws.onError(err)
 				}
-				return
+				ws.reconnect()
+				continue
 			}
 
 			ws.handleMessage(message)
@@ -196,7 +224,7 @@ func (ws *WebSocketClient) handleMessage(data []byte) {
 	}
 
 	switch {
-	case msg.Type == "v2/ticker" || contains(msg.Channel, "ticker"):
+	case msg.Type == "v2/ticker" || msg.Channel == "v2/ticker" || containsSubstr(msg.Type, "ticker") || containsSubstr(msg.Channel, "ticker"):
 		if ws.onTicker != nil {
 			var ticker Ticker
 			if err := json.Unmarshal(msg.Data, &ticker); err == nil {
@@ -204,7 +232,7 @@ func (ws *WebSocketClient) handleMessage(data []byte) {
 			}
 		}
 
-	case contains(msg.Channel, "candlestick"):
+	case containsSubstr(msg.Type, "candlestick") || containsSubstr(msg.Channel, "candlestick"):
 		if ws.onCandle != nil {
 			var candle Candle
 			if err := json.Unmarshal(msg.Data, &candle); err == nil {
@@ -212,7 +240,7 @@ func (ws *WebSocketClient) handleMessage(data []byte) {
 			}
 		}
 
-	case contains(msg.Channel, "l2_orderbook"):
+	case containsSubstr(msg.Type, "l2_orderbook") || containsSubstr(msg.Channel, "l2_orderbook"):
 		if ws.onOrderbook != nil {
 			ws.onOrderbook(msg.Data)
 		}
@@ -239,12 +267,18 @@ func (ws *WebSocketClient) heartbeat() {
 			return
 		case <-ticker.C:
 			ws.mu.RLock()
-			if ws.conn != nil && ws.isConnected {
-				if err := ws.conn.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
-					log.Printf("Heartbeat ping failed: %v", err)
-				}
-			}
+			conn := ws.conn
+			isConnected := ws.isConnected
 			ws.mu.RUnlock()
+			if conn == nil || !isConnected {
+				continue
+			}
+			ws.writeMu.Lock()
+			err := conn.WriteMessage(websocket.PingMessage, []byte{})
+			ws.writeMu.Unlock()
+			if err != nil {
+				log.Printf("Heartbeat ping failed: %v", err)
+			}
 		}
 	}
 }
@@ -290,9 +324,11 @@ func (ws *WebSocketClient) reconnect() {
 	}
 }
 
-// Close closes the WebSocket connection
+// Close closes the WebSocket connection (idempotent - safe to call multiple times)
 func (ws *WebSocketClient) Close() {
-	close(ws.stopChan)
+	ws.closeOnce.Do(func() {
+		close(ws.stopChan)
+	})
 
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
@@ -312,10 +348,6 @@ func (ws *WebSocketClient) IsConnected() bool {
 }
 
 // helper function
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstr(s, substr))
-}
-
 func containsSubstr(s, substr string) bool {
 	for i := 0; i <= len(s)-len(substr); i++ {
 		if s[i:i+len(substr)] == substr {
@@ -323,4 +355,16 @@ func containsSubstr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

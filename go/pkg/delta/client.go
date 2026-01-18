@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/kasyap/delta-go/go/config"
@@ -14,21 +15,47 @@ import (
 
 // Client is the Delta Exchange API client
 type Client struct {
-	cfg        *config.Config
-	httpClient *http.Client
-	baseURL    string
-	limiter    *time.Ticker
+	cfg           *config.Config
+	httpClient    *http.Client
+	baseURL       string
+	apiPathPrefix string
+	limiter       *time.Ticker
 }
 
 // NewClient creates a new Delta Exchange API client
 func NewClient(cfg *config.Config) *Client {
+	parsed, err := url.Parse(cfg.BaseURL)
+	apiPathPrefix := ""
+	if err == nil {
+		apiPathPrefix = parsed.Path
+	}
+	if apiPathPrefix == "" {
+		apiPathPrefix = "/v2"
+	}
+
+	rps := cfg.APIRateLimitRPS
+	if rps <= 0 {
+		rps = 8
+	}
+	interval := time.Second / time.Duration(rps)
+	if interval <= 0 {
+		interval = 125 * time.Millisecond
+	}
+
 	return &Client{
-		cfg:     cfg,
-		baseURL: cfg.BaseURL,
+		cfg:           cfg,
+		baseURL:       cfg.BaseURL,
+		apiPathPrefix: apiPathPrefix,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		limiter: time.NewTicker(100 * time.Millisecond), // 10 rps rate limit
+		limiter: time.NewTicker(interval),
+	}
+}
+
+func (c *Client) Close() {
+	if c.limiter != nil {
+		c.limiter.Stop()
 	}
 }
 
@@ -57,6 +84,8 @@ func (c *Client) doRequest(method, path string, query url.Values, body interface
 		fullURL += "?" + queryString
 	}
 
+	signaturePath := c.apiPathPrefix + path
+
 	var bodyBytes []byte
 	if body != nil {
 		var err error
@@ -71,10 +100,10 @@ func (c *Client) doRequest(method, path string, query url.Values, body interface
 		bodyStr = string(bodyBytes)
 	}
 
-	authHeaders := NewAuthHeaders(c.cfg.APIKey, c.cfg.APISecret, method, path, queryString, bodyStr)
-
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
+		authHeaders := NewAuthHeaders(c.cfg.APIKey, c.cfg.APISecret, method, signaturePath, queryString, bodyStr)
+
 		req, err := http.NewRequest(method, fullURL, bytes.NewReader(bodyBytes))
 		if err != nil {
 			return nil, fmt.Errorf("create request: %w", err)
@@ -103,6 +132,14 @@ func (c *Client) doRequest(method, path string, query url.Values, body interface
 		// Retry on rate limit or server errors
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
 			lastErr = fmt.Errorf("http %d: %s", resp.StatusCode, string(respBody))
+			if resp.StatusCode == 429 {
+				if ra := resp.Header.Get("Retry-After"); ra != "" {
+					if secs, err := strconv.Atoi(ra); err == nil && secs > 0 {
+						time.Sleep(time.Duration(secs) * time.Second)
+						continue
+					}
+				}
+			}
 			time.Sleep(time.Duration(attempt+1) * time.Second)
 			continue
 		}
@@ -140,9 +177,14 @@ func (c *Client) Post(path string, body interface{}) (*APIResponse, error) {
 	return c.doRequest("POST", path, nil, body)
 }
 
-// Delete performs a DELETE request
+// Delete performs a DELETE request (legacy - uses query params)
 func (c *Client) Delete(path string, query url.Values) (*APIResponse, error) {
 	return c.doRequest("DELETE", path, query, nil)
+}
+
+// DeleteWithBody performs a DELETE request with JSON body (Delta v2 API)
+func (c *Client) DeleteWithBody(path string, body interface{}) (*APIResponse, error) {
+	return c.doRequest("DELETE", path, nil, body)
 }
 
 // Put performs a PUT request

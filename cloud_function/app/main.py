@@ -9,10 +9,16 @@ import functions_framework
 from flask import jsonify, request
 import numpy as np
 
+from pathlib import Path
 from regime_ml import HMMMarketDetector, load_model
 
 detectors = {}
-MODEL_DIR = os.environ.get('HMM_MODEL_DIR', '/app/models')
+# Use absolute path derived from this file's location as fallback
+_DEFAULT_MODEL_DIR = str(Path(__file__).parent / "models")
+MODEL_DIR = os.environ.get('HMM_MODEL_DIR') or _DEFAULT_MODEL_DIR
+# Ensure absolute path
+if not os.path.isabs(MODEL_DIR):
+    MODEL_DIR = os.path.abspath(MODEL_DIR)
 
 
 def get_detector(symbol: str) -> HMMMarketDetector:
@@ -103,14 +109,35 @@ def detect_regime(request):
             if field not in data:
                 return jsonify({"error": f"Missing field: {field}"}), 400, headers
         
+        # Validate array lengths match
+        lengths = {field: len(data[field]) for field in required_fields}
+        unique_lengths = set(lengths.values())
+        if len(unique_lengths) > 1:
+            return jsonify({"error": f"Array length mismatch: {lengths}"}), 400, headers
+        
+        # Validate minimum data points
+        data_len = lengths['close']
+        if data_len < 50:
+            return jsonify({"error": f"Insufficient data: {data_len} points, need at least 50"}), 400, headers
+        
+        # Validate numeric data
+        try:
+            opens = np.array(data['open'], dtype=np.float64)
+            highs = np.array(data['high'], dtype=np.float64)
+            lows = np.array(data['low'], dtype=np.float64)
+            closes = np.array(data['close'], dtype=np.float64)
+            volumes = np.array(data['volume'], dtype=np.float64)
+        except (ValueError, TypeError) as e:
+            return jsonify({"error": f"Invalid numeric data: {e}"}), 400, headers
+        
         det = get_detector(symbol)
         
         result = det.detect_regime(
-            opens=np.array(data['open']),
-            highs=np.array(data['high']),
-            lows=np.array(data['low']),
-            closes=np.array(data['close']),
-            volumes=np.array(data['volume'])
+            opens=opens,
+            highs=highs,
+            lows=lows,
+            closes=closes,
+            volumes=volumes
         )
         
         result['symbol'] = symbol

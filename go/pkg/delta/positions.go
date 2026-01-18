@@ -41,19 +41,20 @@ func (c *Client) GetPosition(productID int) (*Position, error) {
 
 // ClosePosition closes a position by placing a reduce-only limit order
 // Falls back to market order if limit doesn't fill within timeout
-func (c *Client) ClosePosition(symbol string, productID int, size int, side string) error {
+// positionSide should be "buy" for long positions (size > 0) or "sell" for short positions (size < 0)
+func (c *Client) ClosePosition(symbol string, productID int, size int, positionSide string) error {
 	// Determine close side (opposite of position side)
 	closeSide := "sell"
-	if side == "sell" {
+	if positionSide == "sell" {
 		closeSide = "buy"
 	}
 
+	// NOTE: Delta API expects only one of product_id or product_symbol, not both
 	req := &OrderRequest{
-		ProductSymbol: symbol,
-		ProductID:     productID,
-		Size:          size,
-		Side:          closeSide,
-		ReduceOnly:    true,
+		ProductID:  productID,
+		Size:       size,
+		Side:       closeSide,
+		ReduceOnly: true,
 	}
 
 	// Use limit order with 3-second timeout for faster exit, then fallback to market

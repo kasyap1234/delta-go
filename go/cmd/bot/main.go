@@ -73,6 +73,71 @@ func (sf *SignalFilter) ShouldTrade(signal strategy.Signal, candles []delta.Cand
 	return true, ""
 }
 
+type PerformanceSnapshot struct {
+	Timestamp     time.Time
+	Equity        float64
+	RealizedPnL   float64
+	UnrealizedPnL float64
+	Positions     int
+}
+
+type PerformanceTracker struct {
+	mu          sync.RWMutex
+	startEquity float64
+	lastEquity  float64
+	snapshots   []PerformanceSnapshot
+	maxSamples  int
+}
+
+func NewPerformanceTracker(maxSamples int) *PerformanceTracker {
+	if maxSamples <= 0 {
+		maxSamples = 500
+	}
+	return &PerformanceTracker{maxSamples: maxSamples}
+}
+
+func (pt *PerformanceTracker) Record(s PerformanceSnapshot) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+
+	if pt.startEquity == 0 {
+		pt.startEquity = s.Equity
+	}
+	pt.lastEquity = s.Equity
+	pt.snapshots = append(pt.snapshots, s)
+	if len(pt.snapshots) > pt.maxSamples {
+		pt.snapshots = pt.snapshots[len(pt.snapshots)-pt.maxSamples:]
+	}
+}
+
+func (pt *PerformanceTracker) Report() map[string]interface{} {
+	pt.mu.RLock()
+	defer pt.mu.RUnlock()
+
+	pnlAbs := pt.lastEquity - pt.startEquity
+	pnlPct := 0.0
+	if pt.startEquity != 0 {
+		pnlPct = (pnlAbs / pt.startEquity) * 100
+	}
+
+	last := PerformanceSnapshot{}
+	if len(pt.snapshots) > 0 {
+		last = pt.snapshots[len(pt.snapshots)-1]
+	}
+
+	return map[string]interface{}{
+		"start_equity":     pt.startEquity,
+		"last_equity":      pt.lastEquity,
+		"pnl_abs":          pnlAbs,
+		"pnl_pct":          pnlPct,
+		"last_timestamp":   last.Timestamp,
+		"realized_pnl":     last.RealizedPnL,
+		"unrealized_pnl":   last.UnrealizedPnL,
+		"open_positions":   last.Positions,
+		"snapshots_stored": len(pt.snapshots),
+	}
+}
+
 // TradingBot is the main bot orchestrator
 type TradingBot struct {
 	cfg          *config.Config
@@ -82,6 +147,7 @@ type TradingBot struct {
 	riskManager  *risk.RiskManager
 	strategyMgr  *strategy.Manager
 	signalFilter *SignalFilter
+	perfTracker  *PerformanceTracker
 
 	// State
 	mu             sync.RWMutex
@@ -91,6 +157,9 @@ type TradingBot struct {
 	lastTicker     *delta.Ticker
 	isRunning      bool
 	stopChan       chan struct{}
+	stopOnce       sync.Once
+	lastPerfUpdate time.Time
+	productCache   map[string]*delta.Product
 }
 
 // NewTradingBot creates a new trading bot
@@ -103,9 +172,11 @@ func NewTradingBot(cfg *config.Config) *TradingBot {
 		riskManager:   risk.NewRiskManager(cfg),
 		strategyMgr:   strategy.NewManager(),
 		signalFilter:  NewSignalFilter(),
+		perfTracker:   NewPerformanceTracker(500),
 		currentRegime: delta.RegimeRanging,
 		candles:       make([]delta.Candle, 0),
 		stopChan:      make(chan struct{}),
+		productCache:  make(map[string]*delta.Product),
 	}
 
 	// Register all regime-specific strategies
@@ -135,6 +206,7 @@ func (bot *TradingBot) Initialize() error {
 		return fmt.Errorf("failed to get product: %v", err)
 	}
 	bot.currentProduct = product
+	bot.productCache[product.Symbol] = product
 	log.Printf("Trading product: %s (ID: %d)", product.Symbol, product.ID)
 
 	// Set leverage
@@ -155,8 +227,12 @@ func (bot *TradingBot) Initialize() error {
 	if err != nil {
 		log.Printf("Warning: failed to get wallet: %v", err)
 	} else {
+		settling := product.SettlingAsset.Symbol
+		if settling == "" {
+			settling = "USDT"
+		}
 		for _, w := range walletResp.Result {
-			if w.AssetSymbol == "USDT" || w.AssetSymbol == "INR" {
+			if w.AssetSymbol == settling {
 				if balance, err := strconv.ParseFloat(w.AvailableBalance, 64); err == nil {
 					bot.riskManager.UpdateBalance(balance)
 					log.Printf("Available balance: %.2f %s", balance, w.AssetSymbol)
@@ -171,6 +247,8 @@ func (bot *TradingBot) Initialize() error {
 		bot.currentRegime = delta.RegimeRanging
 	}
 	log.Printf("Initial market regime: %s", bot.currentRegime)
+
+	bot.updatePerformanceIfDue(true, product)
 
 	return nil
 }
@@ -197,7 +275,9 @@ func (bot *TradingBot) Start() error {
 		log.Printf("Warning: failed to subscribe to candles: %v", err)
 	}
 
+	bot.mu.Lock()
 	bot.isRunning = true
+	bot.mu.Unlock()
 
 	// Start main loop
 	go bot.mainLoop()
@@ -211,7 +291,19 @@ func (bot *TradingBot) Start() error {
 
 // mainLoop is the main trading loop
 func (bot *TradingBot) mainLoop() {
-	ticker := time.NewTicker(10 * time.Second)
+	loopPeriod := 10 * time.Second
+	if d := resolutionToDuration(bot.cfg.CandleInterval); d > 0 {
+		p := d / 3
+		if p < 10*time.Second {
+			p = 10 * time.Second
+		}
+		if p > 60*time.Second {
+			p = 60 * time.Second
+		}
+		loopPeriod = p
+	}
+
+	ticker := time.NewTicker(loopPeriod)
 	defer ticker.Stop()
 
 	for {
@@ -226,6 +318,8 @@ func (bot *TradingBot) mainLoop() {
 
 // tradingCycle runs one iteration of the trading logic
 func (bot *TradingBot) tradingCycle() {
+	bot.updatePerformanceIfDue(false, bot.currentProduct)
+
 	// Check if we can trade
 	canTrade, reason := bot.riskManager.CanTrade()
 	if !canTrade {
@@ -287,11 +381,15 @@ func (bot *TradingBot) multiAssetTradingCycle() {
 			continue
 		}
 
-		// Get product info
-		product, err := bot.deltaClient.GetProductBySymbol(symbol)
-		if err != nil {
-			log.Printf("  %s: failed to get product: %v", symbol, err)
-			continue
+		product := bot.getProductCached(symbol)
+		if product == nil {
+			p, err := bot.deltaClient.GetProductBySymbol(symbol)
+			if err != nil {
+				log.Printf("  %s: failed to get product: %v", symbol, err)
+				continue
+			}
+			bot.setProductCached(symbol, p)
+			product = p
 		}
 		products[symbol] = product
 
@@ -355,7 +453,11 @@ func (bot *TradingBot) multiAssetTradingCycle() {
 // executeSignalForSymbol executes a trading signal for a specific symbol
 func (bot *TradingBot) executeSignalForSymbol(signal strategy.Signal, regime delta.MarketRegime, symbol string, product *delta.Product) {
 	// Get current balance for position sizing
-	balance, err := bot.deltaClient.GetAvailableBalance("USDT")
+	settling := "USDT"
+	if product != nil && product.SettlingAsset.Symbol != "" {
+		settling = product.SettlingAsset.Symbol
+	}
+	balance, err := bot.deltaClient.GetAvailableBalance(settling)
 	if err != nil {
 		log.Printf("Failed to get balance: %v", err)
 		return
@@ -386,11 +488,20 @@ func (bot *TradingBot) executeSignalForSymbol(signal strategy.Signal, regime del
 
 // executeTradeForSymbol places a trade for a specific symbol
 func (bot *TradingBot) executeTradeForSymbol(signal strategy.Signal, regime delta.MarketRegime, balance float64, symbol string, product *delta.Product) {
+	stopLoss := signal.StopLoss
+	if stopLoss <= 0 {
+		stopLoss = bot.riskManager.CalculateStopLoss(signal.Price, signal.Side, 0, regime)
+	}
+	takeProfit := signal.TakeProfit
+	if takeProfit <= 0 {
+		takeProfit = bot.riskManager.CalculateTakeProfit(signal.Price, stopLoss, signal.Side, regime)
+	}
+
 	// Calculate position size using risk manager
 	size := bot.riskManager.CalculatePositionSize(
 		balance,
 		signal.Price,
-		signal.StopLoss,
+		stopLoss,
 		regime,
 		product,
 	)
@@ -405,18 +516,22 @@ func (bot *TradingBot) executeTradeForSymbol(signal strategy.Signal, regime delt
 		log.Printf("Warning: failed to set leverage for %s: %v", symbol, err)
 	}
 
+	// Round SL/TP prices to valid tick size
+	slPrice, _ := delta.RoundToTickSize(stopLoss, product.TickSize)
+	tpPrice, _ := delta.RoundToTickSize(takeProfit, product.TickSize)
+
 	// Create order request with bracket (stop loss + take profit)
+	// NOTE: Delta API expects only one of product_id or product_symbol, not both
 	order := &delta.OrderRequest{
-		ProductSymbol:          symbol,
 		ProductID:              product.ID,
 		Size:                   size,
 		Side:                   signal.Side,
-		BracketStopLossPrice:   fmt.Sprintf("%.2f", signal.StopLoss),
-		BracketTakeProfitPrice: fmt.Sprintf("%.2f", signal.TakeProfit),
+		BracketStopLossPrice:   slPrice,
+		BracketTakeProfitPrice: tpPrice,
 	}
 
 	log.Printf("Placing limit order: %s %s, size=%d, SL=%.2f, TP=%.2f",
-		symbol, signal.Side, size, signal.StopLoss, signal.TakeProfit)
+		symbol, signal.Side, size, stopLoss, takeProfit)
 
 	// Use limit order with 5-second timeout, fallback to market
 	result, err := bot.deltaClient.PlaceLimitOrderWithFallback(order, symbol, 5)
@@ -442,19 +557,30 @@ func (bot *TradingBot) closePositions(side string) {
 	}
 
 	for _, pos := range positions {
+		if pos.Size == 0 {
+			continue
+		}
+		if side == "buy" && pos.Size > 0 {
+			continue
+		}
+		if side == "sell" && pos.Size < 0 {
+			continue
+		}
+
 		if pos.Size != 0 {
 			log.Printf("Closing position: %s size=%d", pos.ProductSymbol, pos.Size)
 
-			closeSide := "sell"
+			// Pass position side (not close side) - ClosePosition will determine the correct close side
+			positionSide := "buy" // long position
 			if pos.Size < 0 {
-				closeSide = "buy"
+				positionSide = "sell" // short position
 			}
 
 			err := bot.deltaClient.ClosePosition(
 				pos.ProductSymbol,
 				pos.ProductID,
 				absInt(pos.Size),
-				closeSide,
+				positionSide,
 			)
 			if err != nil {
 				log.Printf("Failed to close position: %v", err)
@@ -549,13 +675,18 @@ func (bot *TradingBot) handleWSError(err error) {
 	log.Printf("WebSocket error: %v", err)
 }
 
-// Stop gracefully stops the bot
+// Stop gracefully stops the bot (idempotent - safe to call multiple times)
 func (bot *TradingBot) Stop() {
-	log.Println("Stopping trading bot...")
-	bot.isRunning = false
-	close(bot.stopChan)
-	bot.wsClient.Close()
-	log.Println("Bot stopped")
+	bot.stopOnce.Do(func() {
+		log.Println("Stopping trading bot...")
+		bot.mu.Lock()
+		bot.isRunning = false
+		bot.mu.Unlock()
+		close(bot.stopChan)
+		bot.wsClient.Close()
+		bot.deltaClient.Close()
+		log.Println("Bot stopped")
+	})
 }
 
 // GetStatus returns current bot status
@@ -570,6 +701,106 @@ func (bot *TradingBot) GetStatus() map[string]interface{} {
 		"candles_count": len(bot.candles),
 		"ws_connected":  bot.wsClient.IsConnected(),
 		"risk_metrics":  bot.riskManager.GetRiskMetrics(),
+		"performance":   bot.perfTracker.Report(),
+	}
+}
+
+func (bot *TradingBot) updatePerformanceIfDue(force bool, product *delta.Product) {
+	if !force && time.Since(bot.lastPerfUpdate) < 60*time.Second {
+		return
+	}
+
+	equity, eqErr := bot.deltaClient.GetNetEquity()
+	if eqErr != nil {
+		settling := "USDT"
+		if product != nil && product.SettlingAsset.Symbol != "" {
+			settling = product.SettlingAsset.Symbol
+		}
+		if bal, err := bot.deltaClient.GetAvailableBalance(settling); err == nil {
+			equity = bal
+		} else {
+			return
+		}
+	}
+
+	positions, err := bot.deltaClient.GetPositions()
+	if err != nil {
+		return
+	}
+
+	realized := 0.0
+	unrealized := 0.0
+	open := 0
+	for _, p := range positions {
+		if p.Size != 0 {
+			open++
+		}
+		realized += parseFloatOrZero(p.RealizedPnL)
+		unrealized += parseFloatOrZero(p.UnrealizedPnL)
+	}
+
+	bot.perfTracker.Record(PerformanceSnapshot{
+		Timestamp:     time.Now(),
+		Equity:        equity,
+		RealizedPnL:   realized,
+		UnrealizedPnL: unrealized,
+		Positions:     open,
+	})
+	bot.lastPerfUpdate = time.Now()
+
+	report := bot.perfTracker.Report()
+	log.Printf("Performance: equity=%.2f pnl=%.2f (%.2f%%) positions=%d", report["last_equity"], report["pnl_abs"], report["pnl_pct"], open)
+}
+
+func (bot *TradingBot) getProductCached(symbol string) *delta.Product {
+	bot.mu.RLock()
+	defer bot.mu.RUnlock()
+	return bot.productCache[symbol]
+}
+
+func (bot *TradingBot) setProductCached(symbol string, p *delta.Product) {
+	bot.mu.Lock()
+	defer bot.mu.Unlock()
+	bot.productCache[symbol] = p
+}
+
+func parseFloatOrZero(s string) float64 {
+	if s == "" {
+		return 0
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return f
+}
+
+func resolutionToDuration(resolution string) time.Duration {
+	switch resolution {
+	case "1m":
+		return time.Minute
+	case "5m":
+		return 5 * time.Minute
+	case "15m":
+		return 15 * time.Minute
+	case "30m":
+		return 30 * time.Minute
+	case "1h":
+		return time.Hour
+	case "2h":
+		return 2 * time.Hour
+	case "4h":
+		return 4 * time.Hour
+	case "6h":
+		return 6 * time.Hour
+	case "1d":
+		return 24 * time.Hour
+	case "7d":
+		return 7 * 24 * time.Hour
+	case "30d":
+		return 30 * 24 * time.Hour
+	default:
+		return 0
 	}
 }
 

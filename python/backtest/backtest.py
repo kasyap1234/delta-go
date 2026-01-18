@@ -344,6 +344,8 @@ class BacktestEngine:
             
             if response.status_code == 200:
                 return response.json()
+            else:
+                print(f"Strategy server returned {response.status_code}: {response.text[:200]}")
         except Exception as e:
             print(f"Strategy server error: {e}")
             
@@ -638,8 +640,8 @@ def main():
                       help='Leverage')
     parser.add_argument('--output', type=str, default='backtest_results.json',
                       help='Output file path')
-    parser.add_argument('--models-dir', type=str, default='../../models',
-                      help='Directory containing HMM models')
+    parser.add_argument('--models-dir', type=str, default=None,
+                      help='Directory containing HMM models (defaults to repo root models/)')
     
     args = parser.parse_args()
     

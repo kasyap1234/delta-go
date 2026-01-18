@@ -5,13 +5,19 @@ Uses XGBoost model trained on historical trade outcomes
 """
 import os
 import pickle
+from pathlib import Path
 import functions_framework
 from flask import jsonify, request
 import numpy as np
 
 # Model cache
 predictor_model = None
-MODEL_PATH = os.environ.get('TRADE_PREDICTOR_MODEL', '/app/models/trade_predictor.pkl')
+# Use absolute path derived from this file's location as fallback
+_DEFAULT_MODEL_PATH = str(Path(__file__).parent.parent / "models" / "trade_predictor.pkl")
+MODEL_PATH = os.environ.get('TRADE_PREDICTOR_MODEL') or _DEFAULT_MODEL_PATH
+# Ensure absolute path
+if not os.path.isabs(MODEL_PATH):
+    MODEL_PATH = os.path.abspath(MODEL_PATH)
 
 
 def load_model():
@@ -172,6 +178,27 @@ def predict_trade(request):
         
         if not data:
             return jsonify({"error": "No data provided"}), 400, headers
+        
+        # Validate required fields
+        required_fields = ['regime']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"error": f"Missing required field: {field}"}), 400, headers
+        
+        # Validate regime value
+        valid_regimes = {'bull', 'bear', 'ranging', 'high_volatility', 'low_volatility'}
+        regime = data.get('regime', '').lower()
+        if regime not in valid_regimes:
+            return jsonify({"error": f"Invalid regime '{regime}', must be one of: {valid_regimes}"}), 400, headers
+        
+        # Validate numeric fields if provided
+        numeric_fields = ['rsi', 'bb_position', 'atr_pct', 'volume_ratio', 'consecutive_candles']
+        for field in numeric_fields:
+            if field in data:
+                try:
+                    float(data[field])
+                except (ValueError, TypeError):
+                    return jsonify({"error": f"Field '{field}' must be numeric"}), 400, headers
         
         # Try ML model first, fallback to heuristics
         model = load_model()

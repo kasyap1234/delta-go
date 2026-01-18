@@ -3,6 +3,7 @@ package delta
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 )
 
 // GetWalletBalances returns all wallet balances
@@ -54,10 +55,25 @@ func (c *Client) GetAvailableBalance(assetSymbol string) (float64, error) {
 		return 0, err
 	}
 
-	var balance float64
-	if _, err := fmt.Sscanf(wallet.AvailableBalance, "%f", &balance); err != nil {
+	balance, err := strconv.ParseFloat(wallet.AvailableBalance, 64)
+	if err != nil {
 		return 0, fmt.Errorf("failed to parse available balance: %v", err)
 	}
 
 	return balance, nil
+}
+
+func (c *Client) GetNetEquity() (float64, error) {
+	walletResp, err := c.GetWalletBalances()
+	if err != nil {
+		return 0, err
+	}
+	if walletResp.Meta.NetEquity == "" {
+		return 0, fmt.Errorf("net equity not available")
+	}
+	eq, err := strconv.ParseFloat(walletResp.Meta.NetEquity, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse net equity: %v", err)
+	}
+	return eq, nil
 }

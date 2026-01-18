@@ -1,0 +1,72 @@
+steps:
+  # Stage HMM Cloud Function source
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'stage-hmm-function-source'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        rm -rf ./gcf_src_hmm
+        mkdir -p ./gcf_src_hmm
+        cp cloud_function/app/main.py ./gcf_src_hmm/main.py
+        cp cloud_function/requirements.txt ./gcf_src_hmm/requirements.txt
+        cp -R models ./gcf_src_hmm/
+        cp -R python/regime_ml/src/regime_ml ./gcf_src_hmm/
+
+  # Create VM service account if it doesn't exist
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'create-vm-service-account'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if ! gcloud iam service-accounts describe "${_VM_SERVICE_ACCOUNT}@${PROJECT_ID}.iam.gserviceaccount.com" >/dev/null 2>&1; then
+          gcloud iam service-accounts create "${_VM_SERVICE_ACCOUNT}" \
+            --display-name="Delta Bot VM Service Account"
+        fi
+
+  # Deploy HMM Detector Cloud Function (Gen2, authenticated only)
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'deploy-hmm-detector'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gcloud functions deploy "${_HMM_FUNCTION_NAME}" \
+          --gen2 \
+          --region "${_CLOUD_FUNCTION_REGION}" \
+          --runtime python312 \
+          --source ./gcf_src_hmm \
+          --entry-point detect_regime \
+          --trigger-http \
+          --set-env-vars HMM_MODEL_DIR=models \
+          --no-allow-unauthenticated
+        
+        # Grant VM service account permission to invoke this function
+        gcloud functions add-invoker-policy-binding "${_HMM_FUNCTION_NAME}" \
+          --region "${_CLOUD_FUNCTION_REGION}" \
+          --member "serviceAccount:${_VM_SERVICE_ACCOUNT}@${PROJECT_ID}.iam.gserviceaccount.com"
+    waitFor: ['stage-hmm-function-source', 'create-vm-service-account']
+
+  # Verify deployment
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'verify-hmm-deployment'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "HMM Detector function deployed successfully"
+        gcloud functions describe "${_HMM_FUNCTION_NAME}" \
+          --region "${_CLOUD_FUNCTION_REGION}" \
+          --format 'table(name,status,serviceConfig.uri)'
+    waitFor: ['deploy-hmm-detector']
+
+substitutions:
+  _HMM_FUNCTION_NAME: 'hmm-detector'
+  _CLOUD_FUNCTION_REGION: 'us-central1'
+  _VM_SERVICE_ACCOUNT: 'delta-bot-vm'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: '600s'

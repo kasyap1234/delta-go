@@ -1,0 +1,202 @@
+steps:
+  # Build Go bot binary
+  - name: 'golang:1.23'
+    id: 'build-go-bot'
+    dir: 'go'
+    env:
+      - 'GOOS=linux'
+      - 'GOARCH=amd64'
+      - 'CGO_ENABLED=0'
+    args:
+      - 'go'
+      - 'build'
+      - '-trimpath'
+      - '-ldflags=-s -w'
+      - '-o'
+      - 'bot'
+      - './cmd/bot'
+
+  # Create VM service account if it doesn't exist
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'create-vm-service-account'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if ! gcloud iam service-accounts describe "${_VM_SERVICE_ACCOUNT}@${PROJECT_ID}.iam.gserviceaccount.com" >/dev/null 2>&1; then
+          gcloud iam service-accounts create "${_VM_SERVICE_ACCOUNT}" \
+            --display-name="Delta Bot VM Service Account"
+        fi
+
+  # Get Cloud Function URLs (both HMM and Trade Predictor)
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'get-function-urls'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        HMM_URL=$(gcloud functions describe "${_HMM_FUNCTION_NAME}" \
+          --region "${_CLOUD_FUNCTION_REGION}" \
+          --format 'value(serviceConfig.uri)')
+        PREDICTOR_URL=$(gcloud functions describe "${_PREDICTOR_FUNCTION_NAME}" \
+          --region "${_CLOUD_FUNCTION_REGION}" \
+          --format 'value(serviceConfig.uri)')
+        
+        cat > /workspace/function_urls.env <<EOF
+        HMM_ENDPOINT=${HMM_URL}
+        TRADE_PREDICTOR_ENDPOINT=${PREDICTOR_URL}
+        EOF
+        echo "Function URLs retrieved:"
+        cat /workspace/function_urls.env
+    waitFor: ['create-vm-service-account']
+
+  # Fetch secrets from Secret Manager
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'fetch-secrets'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "Fetching secrets from Secret Manager..."
+        DELTA_API_KEY=$(gcloud secrets versions access latest --secret="${_SECRET_DELTA_API_KEY}")
+        DELTA_API_SECRET=$(gcloud secrets versions access latest --secret="${_SECRET_DELTA_API_SECRET}")
+        
+        cat > /workspace/secrets.env <<EOF
+        DELTA_API_KEY=${DELTA_API_KEY}
+        DELTA_API_SECRET=${DELTA_API_SECRET}
+        EOF
+        echo "Secrets fetched successfully"
+
+  # Reserve static IP if it doesn't exist
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'reserve-static-ip'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if ! gcloud compute addresses describe "${_GCE_INSTANCE_NAME}-ip" --region "${_GCE_REGION}" >/dev/null 2>&1; then
+          gcloud compute addresses create "${_GCE_INSTANCE_NAME}-ip" \
+            --region "${_GCE_REGION}"
+        fi
+        STATIC_IP=$(gcloud compute addresses describe "${_GCE_INSTANCE_NAME}-ip" \
+          --region "${_GCE_REGION}" --format 'value(address)')
+        echo "Static IP: ${STATIC_IP}"
+        echo "${STATIC_IP}" > /workspace/static_ip.txt
+
+  # Ensure GCE VM exists with the service account and static IP
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'ensure-vm-exists'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        STATIC_IP=$(cat /workspace/static_ip.txt)
+        if gcloud compute instances describe "${_GCE_INSTANCE_NAME}" --zone "${_GCE_ZONE}" >/dev/null 2>&1; then
+          echo "VM exists"
+          # Check if static IP is already attached
+          CURRENT_IP=$(gcloud compute instances describe "${_GCE_INSTANCE_NAME}" \
+            --zone "${_GCE_ZONE}" --format 'value(networkInterfaces[0].accessConfigs[0].natIP)')
+          if [ "${CURRENT_IP}" != "${STATIC_IP}" ]; then
+            echo "Updating VM to use static IP..."
+            gcloud compute instances delete-access-config "${_GCE_INSTANCE_NAME}" \
+              --zone "${_GCE_ZONE}" --access-config-name "external-nat" || true
+            gcloud compute instances add-access-config "${_GCE_INSTANCE_NAME}" \
+              --zone "${_GCE_ZONE}" --address "${STATIC_IP}"
+          fi
+          exit 0
+        fi
+        gcloud compute instances create "${_GCE_INSTANCE_NAME}" \
+          --zone "${_GCE_ZONE}" \
+          --machine-type "${_GCE_MACHINE_TYPE}" \
+          --provisioning-model STANDARD \
+          --maintenance-policy MIGRATE \
+          --service-account "${_VM_SERVICE_ACCOUNT}@${PROJECT_ID}.iam.gserviceaccount.com" \
+          --scopes "https://www.googleapis.com/auth/cloud-platform" \
+          --create-disk=auto-delete=yes,boot=yes,image-family=debian-13-minimal,image-project=debian-cloud,mode=rw,size=${_GCE_BOOT_DISK_SIZE_GB},type=${_GCE_BOOT_DISK_TYPE} \
+          --network-interface=stack-type=IPV4_ONLY,subnet=default,address="${STATIC_IP}" \
+          --tags=http-server,https-server
+    waitFor: ['build-go-bot', 'create-vm-service-account', 'reserve-static-ip']
+
+  # Copy binary and env files to VM
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'copy-files'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gcloud compute scp \
+          --zone "${_GCE_ZONE}" \
+          --ssh-key-expire-after=1h \
+          go/bot /workspace/function_urls.env /workspace/secrets.env \
+          "${_GCE_SSH_USER}@${_GCE_INSTANCE_NAME}:/tmp/"
+    waitFor: ['ensure-vm-exists', 'get-function-urls', 'fetch-secrets']
+
+  # Install bot and configure environment
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'install-and-restart'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gcloud compute ssh \
+          --zone "${_GCE_ZONE}" \
+          --ssh-key-expire-after=1h \
+          "${_GCE_SSH_USER}@${_GCE_INSTANCE_NAME}" \
+          --command "set -euo pipefail
+            # Install binary
+            sudo mkdir -p /opt/delta-go/bin
+            sudo install -m 0755 /tmp/bot /opt/delta-go/bin/bot
+            rm -f /tmp/bot
+
+            # Create fresh environment file with secrets and endpoints
+            sudo mkdir -p /opt/delta-go/config
+            sudo cat /tmp/secrets.env /tmp/function_urls.env > /opt/delta-go/config/bot.env
+            sudo chmod 600 /opt/delta-go/config/bot.env
+            rm -f /tmp/function_urls.env /tmp/secrets.env
+
+            # Create systemd service if it doesn't exist
+            if [ ! -f /etc/systemd/system/delta-bot.service ]; then
+              sudo tee /etc/systemd/system/delta-bot.service > /dev/null <<'EOF'
+        [Unit]
+        Description=Delta Trading Bot
+        After=network.target
+
+        [Service]
+        Type=simple
+        EnvironmentFile=/opt/delta-go/config/bot.env
+        ExecStart=/opt/delta-go/bin/bot
+        Restart=always
+        RestartSec=10
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+              sudo systemctl daemon-reload
+              sudo systemctl enable delta-bot
+            fi
+
+            # Restart the bot
+            sudo systemctl restart delta-bot
+            sleep 2
+            sudo systemctl --no-pager --full status delta-bot || true"
+    waitFor: ['copy-files']
+
+substitutions:
+  _HMM_FUNCTION_NAME: 'hmm-detector'
+  _PREDICTOR_FUNCTION_NAME: 'trade-predictor'
+  _CLOUD_FUNCTION_REGION: 'us-central1'
+  _GCE_ZONE: 'us-central1-a'
+  _GCE_REGION: 'us-central1'
+  _GCE_MACHINE_TYPE: 'e2-micro'
+  _GCE_BOOT_DISK_TYPE: 'pd-standard'
+  _GCE_BOOT_DISK_SIZE_GB: '10'
+  _GCE_INSTANCE_NAME: ''       # Set via trigger or --substitutions
+  _GCE_SSH_USER: ''            # Set via trigger or --substitutions
+  _VM_SERVICE_ACCOUNT: 'delta-bot-vm'  # Service account name for the VM
+  _SECRET_DELTA_API_KEY: 'delta-api-key'      # Secret Manager secret name
+  _SECRET_DELTA_API_SECRET: 'delta-api-secret' # Secret Manager secret name
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: '1800s'

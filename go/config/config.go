@@ -10,11 +10,12 @@ import (
 // Config holds all configuration for the trading bot
 type Config struct {
 	// Delta Exchange API
-	APIKey       string
-	APISecret    string
-	BaseURL      string
-	WebSocketURL string
-	IsTestnet    bool
+	APIKey          string
+	APISecret       string
+	BaseURL         string
+	WebSocketURL    string
+	IsTestnet       bool
+	APIRateLimitRPS int
 
 	// Trading
 	Symbol         string   // Primary/single symbol (backward compatible)
@@ -27,10 +28,11 @@ type Config struct {
 	HMMEndpoint string
 
 	// Risk Management
-	MaxDrawdownPct  float64
-	StopLossPct     float64
-	TakeProfitPct   float64
-	RiskPerTradePct float64
+	MaxDrawdownPct    float64
+	StopLossPct       float64
+	TakeProfitPct     float64
+	RiskPerTradePct   float64
+	DailyLossLimitPct float64
 
 	// Intervals
 	CandleInterval    string        // "1m", "5m", "15m", etc.
@@ -40,21 +42,23 @@ type Config struct {
 // LoadConfig loads configuration from environment variables
 func LoadConfig() *Config {
 	cfg := &Config{
-		APIKey:         getEnv("DELTA_API_KEY", ""),
-		APISecret:      getEnv("DELTA_API_SECRET", ""),
-		IsTestnet:      getEnvBool("DELTA_TESTNET", true),
-		Symbol:         getEnv("DELTA_SYMBOL", "BTCUSD"),
-		Symbols:        parseSymbols(getEnv("DELTA_SYMBOLS", "BTCUSD,ETHUSD,SOLUSD")),
-		Leverage:       getEnvInt("DELTA_LEVERAGE", 10),
-		MaxPositionPct: getEnvFloat("DELTA_MAX_POSITION_PCT", 10.0),
-		MultiAssetMode: getEnvBool("MULTI_ASSET_MODE", false),
-		HMMEndpoint:    getEnv("HMM_ENDPOINT", "http://localhost:8080"),
+		APIKey:          getEnv("DELTA_API_KEY", ""),
+		APISecret:       getEnv("DELTA_API_SECRET", ""),
+		IsTestnet:       getEnvBool("DELTA_TESTNET", true),
+		APIRateLimitRPS: getEnvInt("DELTA_API_RATE_LIMIT_RPS", 8),
+		Symbol:          getEnv("DELTA_SYMBOL", "BTCUSD"),
+		Symbols:         parseSymbols(getEnv("DELTA_SYMBOLS", "BTCUSD,ETHUSD,SOLUSD")),
+		Leverage:        getEnvInt("DELTA_LEVERAGE", 10),
+		MaxPositionPct:  getEnvFloat("DELTA_MAX_POSITION_PCT", 10.0),
+		MultiAssetMode:  getEnvBool("MULTI_ASSET_MODE", true),
+		HMMEndpoint:     getEnv("HMM_ENDPOINT", "http://localhost:8080"),
 
 		// Risk defaults
-		MaxDrawdownPct:  getEnvFloat("MAX_DRAWDOWN_PCT", 10.0),
-		StopLossPct:     getEnvFloat("STOP_LOSS_PCT", 2.0),
-		TakeProfitPct:   getEnvFloat("TAKE_PROFIT_PCT", 4.0),
-		RiskPerTradePct: getEnvFloat("RISK_PER_TRADE_PCT", 1.0),
+		MaxDrawdownPct:    getEnvFloat("MAX_DRAWDOWN_PCT", 10.0),
+		StopLossPct:       getEnvFloat("STOP_LOSS_PCT", 2.0),
+		TakeProfitPct:     getEnvFloat("TAKE_PROFIT_PCT", 4.0),
+		RiskPerTradePct:   getEnvFloat("RISK_PER_TRADE_PCT", 1.0),
+		DailyLossLimitPct: getEnvFloat("DAILY_LOSS_LIMIT_PCT", -5.0),
 
 		// Intervals
 		CandleInterval:    getEnv("CANDLE_INTERVAL", "5m"),
@@ -62,8 +66,9 @@ func LoadConfig() *Config {
 	}
 
 	// Set URLs based on testnet flag
+	// Per Delta docs: https://docs.delta.exchange/
 	if cfg.IsTestnet {
-		cfg.BaseURL = "https://api-ind.testnet.deltaex.org/v2"
+		cfg.BaseURL = "https://cdn-ind.testnet.deltaex.org/v2"
 		cfg.WebSocketURL = "wss://socket-ind.testnet.deltaex.org"
 	} else {
 		cfg.BaseURL = "https://api.india.delta.exchange/v2"

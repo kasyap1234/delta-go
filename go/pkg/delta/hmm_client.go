@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -13,6 +15,8 @@ import (
 type HMMClient struct {
 	endpoint   string
 	httpClient *http.Client
+	tokenCache string
+	tokenMu    sync.RWMutex
 }
 
 // NewHMMClient creates a new HMM client
@@ -23,6 +27,64 @@ func NewHMMClient(endpoint string) *HMMClient {
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+// getIdentityToken fetches an identity token from the GCE metadata server
+func (c *HMMClient) getIdentityToken() (string, error) {
+	c.tokenMu.RLock()
+	cached := c.tokenCache
+	c.tokenMu.RUnlock()
+	if cached != "" {
+		return cached, nil
+	}
+
+	metadataURL := fmt.Sprintf(
+		"http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=%s",
+		c.endpoint,
+	)
+
+	req, err := http.NewRequest("GET", metadataURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("create metadata request: %w", err)
+	}
+	req.Header.Set("Metadata-Flavor", "Google")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		// Connection error to metadata server - likely not on GCE
+		log.Printf("HMM auth: metadata server unreachable, skipping auth: %v", err)
+		return "", nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		// 404 means not on GCE or service account not configured
+		return "", nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		// Other errors (401, 403, 5xx) should be reported
+		return "", fmt.Errorf("metadata server returned %d", resp.StatusCode)
+	}
+
+	token, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read token: %w", err)
+	}
+
+	c.tokenMu.Lock()
+	c.tokenCache = string(token)
+	c.tokenMu.Unlock()
+
+	// Refresh token before expiry (tokens last ~1 hour, refresh at 50 min)
+	go func() {
+		time.Sleep(50 * time.Minute)
+		c.tokenMu.Lock()
+		c.tokenCache = ""
+		c.tokenMu.Unlock()
+	}()
+
+	return string(token), nil
 }
 
 // DetectRegime calls the HMM Cloud Run function to detect market regime
@@ -40,6 +102,11 @@ func (c *HMMClient) DetectRegime(candles []Candle, symbol string) (*HMMResponse,
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+
+	// Add identity token for authenticated Cloud Functions
+	if token, err := c.getIdentityToken(); err == nil && token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

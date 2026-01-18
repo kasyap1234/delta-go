@@ -1,0 +1,124 @@
+steps:
+  # Stage Cloud Function source
+  - name: "gcr.io/cloud-builders/gcloud"
+    id: "stage-function-source"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        rm -rf ./gcf_src
+        mkdir -p ./gcf_src
+        cp cloud_function/app/main.py ./gcf_src/main.py
+        cp cloud_function/requirements.txt ./gcf_src/requirements.txt
+        cp -R models ./gcf_src/models
+        cp -R python/regime_ml/src/regime_ml ./gcf_src/
+
+  # Deploy HMM Detector Cloud Function
+  - name: "gcr.io/cloud-builders/gcloud"
+    id: "deploy-hmm-detector"
+    args:
+      - "functions"
+      - "deploy"
+      - "${_CLOUD_FUNCTION_NAME}"
+      - "--gen2"
+      - "--region=${_CLOUD_FUNCTION_REGION}"
+      - "--runtime=python312"
+      - "--source=./gcf_src"
+      - "--entry-point=detect_regime"
+      - "--trigger-http"
+      - "--set-env-vars=HMM_MODEL_DIR=models"
+      - "--allow-unauthenticated"
+    waitFor: ["stage-function-source"]
+
+  # Build Go bot binary
+  - name: "golang:1.23"
+    id: "build-go-bot"
+    dir: "go"
+    env:
+      - "GOOS=linux"
+      - "GOARCH=amd64"
+      - "CGO_ENABLED=0"
+    args:
+      - "go"
+      - "build"
+      - "-trimpath"
+      - "-ldflags=-s -w"
+      - "-o"
+      - "bot"
+      - "./cmd/bot"
+
+  # Ensure GCE VM exists
+  - name: "gcr.io/cloud-builders/gcloud"
+    id: "ensure-vm-exists"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if gcloud compute instances describe "${_GCE_INSTANCE_NAME}" --zone "${_GCE_ZONE}" >/dev/null 2>&1; then
+          echo "VM exists"
+          exit 0
+        fi
+        gcloud compute instances create "${_GCE_INSTANCE_NAME}" \
+          --zone "${_GCE_ZONE}" \
+          --machine-type "${_GCE_MACHINE_TYPE}" \
+          --provisioning-model STANDARD \
+          --maintenance-policy MIGRATE \
+          --create-disk=auto-delete=yes,boot=yes,image-family=ubuntu-2404-lts,image-project=ubuntu-os-cloud,mode=rw,size=${_GCE_BOOT_DISK_SIZE_GB},type=${_GCE_BOOT_DISK_TYPE} \
+          --network-interface=stack-type=IPV4_ONLY,subnet=default \
+          --tags=http-server,https-server
+    waitFor: ["build-go-bot"]
+
+  # Copy binary to VM
+  - name: "gcr.io/cloud-builders/gcloud"
+    id: "copy-binary"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        gcloud compute scp \
+          --zone "${_GCE_ZONE}" \
+          --ssh-key-expire-after=1h \
+          go/bot \
+          "${_GCE_SSH_USER}@${_GCE_INSTANCE_NAME}:/tmp/delta-go-bot"
+    waitFor: ["ensure-vm-exists"]
+
+  # Install and restart bot on VM
+  - name: "gcr.io/cloud-builders/gcloud"
+    id: "install-and-restart"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        gcloud compute ssh \
+          --zone "${_GCE_ZONE}" \
+          --ssh-key-expire-after=1h \
+          "${_GCE_SSH_USER}@${_GCE_INSTANCE_NAME}" \
+          --command "set -euo pipefail
+            sudo mkdir -p /opt/delta-go/bin
+            sudo install -m 0755 /tmp/delta-go-bot /opt/delta-go/bin/bot
+            rm -f /tmp/delta-go-bot
+
+            if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q '^delta-bot\.service'; then
+              sudo systemctl daemon-reload
+              sudo systemctl restart delta-bot
+              sudo systemctl --no-pager --full status delta-bot || true
+            else
+              sudo pkill -f '/opt/delta-go/bin/bot' || true
+              nohup sudo /opt/delta-go/bin/bot >/var/log/delta-bot.log 2>&1 &
+            fi"
+    waitFor: ["copy-binary"]
+
+substitutions:
+  _CLOUD_FUNCTION_NAME: "hmm-detector"
+  _CLOUD_FUNCTION_REGION: "us-central1"
+  _GCE_ZONE: "us-central1-a"
+  _GCE_MACHINE_TYPE: "e2-micro"
+  _GCE_BOOT_DISK_TYPE: "pd-standard"
+  _GCE_BOOT_DISK_SIZE_GB: "10"
+  _GCE_INSTANCE_NAME: "" # Set via trigger or --substitutions
+  _GCE_SSH_USER: "" # Set via trigger or --substitutions
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: "1800s"

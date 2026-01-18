@@ -40,7 +40,7 @@ type RiskManager struct {
 func NewRiskManager(cfg *config.Config) *RiskManager {
 	return &RiskManager{
 		cfg:            cfg,
-		dailyLossLimit: -5.0, // -5% daily loss limit
+		dailyLossLimit: cfg.DailyLossLimitPct,
 		currentDay:     time.Now().Truncate(24 * time.Hour),
 	}
 }
@@ -102,13 +102,17 @@ func (rm *RiskManager) UpdateBalance(balance float64) {
 
 // CanTrade checks if trading is allowed
 func (rm *RiskManager) CanTrade() (bool, string) {
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
 
-	// Check daily loss limit first (Fix #1)
+	// Check daily loss limit first
 	if rm.isDailyLimitHit {
 		if time.Now().After(rm.dailyLimitResetTime) {
-			// Reset at start of new day
+			// Reset at start of new day - actually clear the flag
+			rm.isDailyLimitHit = false
+			rm.currentDay = time.Now().Truncate(24 * time.Hour)
+			rm.dailyPnL = 0
+			log.Printf("Daily limit reset - trading resumed")
 			return true, ""
 		}
 		hoursRemaining := rm.dailyLimitResetTime.Sub(time.Now()).Hours()
@@ -119,6 +123,9 @@ func (rm *RiskManager) CanTrade() (bool, string) {
 	if rm.isCircuitBroken {
 		// Auto-reset after 24 hours
 		if time.Since(rm.circuitBrokenAt) > 24*time.Hour {
+			rm.isCircuitBroken = false
+			rm.circuitBrokenAt = time.Time{}
+			rm.peakBalance = rm.currentBalance
 			return true, ""
 		}
 		return false, fmt.Sprintf("circuit breaker active (%.1f hours remaining)",
