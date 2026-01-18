@@ -2,7 +2,9 @@ package strategy
 
 import (
 	"fmt"
+	"math"
 
+	"github.com/kasyap/delta-go/go/pkg/delta"
 	"github.com/kasyap/delta-go/go/pkg/features"
 )
 
@@ -20,8 +22,8 @@ func DefaultGridConfig() GridConfig {
 		GridLevels:           10,
 		GridRangePct:         3.0,
 		PositionSizePerLevel: 1,
-		MaxVolatilityPct:     50.0,
-		MinVolatilityPct:     30.0,
+		MaxVolatilityPct:     200.0,
+		MinVolatilityPct:     150.0,
 		Enabled:              true,
 	}
 }
@@ -34,10 +36,11 @@ type GridLevel struct {
 }
 
 type GridTradingStrategy struct {
-	cfg      GridConfig
-	levels   []GridLevel
-	isActive bool
-	symbol   string
+	cfg         GridConfig
+	levels      []GridLevel
+	IsActive    bool
+	symbol      string
+	centerPrice float64
 }
 
 func NewGridTradingStrategy(cfg GridConfig, symbol string) *GridTradingStrategy {
@@ -51,7 +54,7 @@ func (g *GridTradingStrategy) Name() string {
 	return "grid_trading"
 }
 
-func (g *GridTradingStrategy) Analyze(f features.MarketFeatures, candles []interface{}) Signal {
+func (g *GridTradingStrategy) Analyze(f features.MarketFeatures, candles []delta.Candle) Signal {
 	if !g.cfg.Enabled {
 		return Signal{Action: ActionNone, Reason: "grid disabled"}
 	}
@@ -60,22 +63,63 @@ func (g *GridTradingStrategy) Analyze(f features.MarketFeatures, candles []inter
 	midPrice := (f.BestBid + f.BestAsk) / 2
 
 	// Activation logic
-	if !g.isActive {
+	if !g.IsActive {
 		if volPct < g.cfg.MinVolatilityPct && volPct > 5 {
-			g.isActive = true
+			g.IsActive = true
+			g.centerPrice = midPrice
 			g.levels = g.CalculateLevels(midPrice)
 			return Signal{Action: ActionNone, Reason: "grid activated, placing levels"}
 		}
 		return Signal{Action: ActionNone, Reason: "conditions not met for grid"}
 	}
 
-	// Deactivation logic
+	// Deactivation logic (High Volatility)
 	if volPct > g.cfg.MaxVolatilityPct {
-		g.isActive = false
+		g.IsActive = false
 		return Signal{Action: ActionClose, Reason: "grid deactivated: high volatility"}
 	}
 
-	return Signal{Action: ActionNone, Reason: "grid monitoring fill events"}
+	// Recenter Logic (Trend Following)
+	// If price drifts near the edge of the grid, reset to follow the trend
+	driftPct := math.Abs(midPrice-g.centerPrice) / g.centerPrice * 100
+	if driftPct > g.cfg.GridRangePct*0.8 {
+		g.IsActive = false
+		return Signal{Action: ActionClose, Reason: "grid recentering"}
+	}
+
+	// Backtest Logic: Mean Reversion at Grid Boundaries
+	// Since backtester doesn't handle multiple limit orders, we simulate
+	// buying at the bottom of the grid and selling at the top.
+	if len(g.levels) > 0 {
+		lowerBound := g.levels[0].Price
+		upperBound := g.levels[len(g.levels)-1].Price
+
+		// Ensure sorted
+		if lowerBound > upperBound {
+			lowerBound, upperBound = upperBound, lowerBound
+		}
+
+		if midPrice < lowerBound {
+			return Signal{
+				Action:     ActionBuy,
+				Side:       "buy",
+				Price:      midPrice,
+				Reason:     "price below grid lower bound",
+				Confidence: 0.8,
+			}
+		}
+		if midPrice > upperBound {
+			return Signal{
+				Action:     ActionSell,
+				Side:       "sell",
+				Price:      midPrice,
+				Reason:     "price above grid upper bound",
+				Confidence: 0.8,
+			}
+		}
+	}
+
+	return Signal{Action: ActionNone, Reason: "grid monitoring"}
 }
 
 func (g *GridTradingStrategy) CalculateLevels(midPrice float64) []GridLevel {

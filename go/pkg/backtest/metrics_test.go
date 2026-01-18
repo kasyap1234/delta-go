@@ -100,9 +100,10 @@ func TestMetricsCalculator_CostBreakdown(t *testing.T) {
 	config := DefaultConfig()
 	mc := NewMetricsCalculator(config)
 
+	// Now using EntrySlipCost/ExitSlipCost (in dollars) instead of EntrySlip/ExitSlip (in price units)
 	trades := []Trade{
-		{EntryFee: 1.0, ExitFee: 1.0, EntrySlip: 0.5, ExitSlip: 0.5, FundingPaid: 0.2},
-		{EntryFee: 1.5, ExitFee: 1.5, EntrySlip: 0.8, ExitSlip: 0.7, FundingPaid: 0.3},
+		{EntryFee: 1.0, ExitFee: 1.0, EntrySlipCost: 0.5, ExitSlipCost: 0.5, FundingPaid: 0.2},
+		{EntryFee: 1.5, ExitFee: 1.5, EntrySlipCost: 0.8, ExitSlipCost: 0.7, FundingPaid: 0.3},
 	}
 
 	equityCurve := []EquityPoint{

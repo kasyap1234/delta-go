@@ -66,7 +66,7 @@ func LoadConfig() *Config {
 
 		// Strategy settings
 		ScalperEnabled:    getEnvBool("SCALPER_ENABLED", true),
-		BasisTradeEnabled: getEnvBool("BASIS_TRADE_ENABLED", true),
+		BasisTradeEnabled: getEnvBool("BASIS_TRADE_ENABLED", false), // Disabled by default - requires spot hedge for profitability
 
 		// Scalper settings
 		ScalpImbalanceThreshold: getEnvFloat("SCALP_IMBALANCE_THRESHOLD", 0.5),

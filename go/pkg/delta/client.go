@@ -187,7 +187,62 @@ func (c *Client) DeleteWithBody(path string, body interface{}) (*APIResponse, er
 	return c.doRequest("DELETE", path, nil, body)
 }
 
+// GetFuturesProductForPerp attempts to find a matching futures contract for hedging
+
+func (c *Client) GetFuturesProductForPerp(perpSymbol string) (*Product, error) {
+
+	products, err := c.GetProducts()
+
+	if err != nil {
+
+		return nil, err
+
+	}
+
+
+
+	// Extract base symbol (e.g., "BTC" from "BTCUSD")
+
+	baseSymbol := ""
+
+	if len(perpSymbol) >= 3 {
+
+		baseSymbol = perpSymbol[:3]
+
+	}
+
+
+
+	for i := range products {
+
+		p := &products[i]
+
+		// Check for futures contract with same base asset
+
+		if p.ProductType == "futures" {
+
+			if len(p.Symbol) >= len(baseSymbol) && p.Symbol[:len(baseSymbol)] == baseSymbol {
+
+				return p, nil
+
+			}
+
+		}
+
+	}
+
+
+
+	return nil, fmt.Errorf("no futures product found for %s", perpSymbol)
+
+}
+
+
+
 // Put performs a PUT request
+
 func (c *Client) Put(path string, body interface{}) (*APIResponse, error) {
+
 	return c.doRequest("PUT", path, nil, body)
+
 }

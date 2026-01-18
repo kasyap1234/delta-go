@@ -372,10 +372,8 @@ func (c *Client) PlaceLimitOrderWithFallback(req *OrderRequest, symbol string, t
 	}
 
 	// Determine how much was filled and calculate remaining size
-	filledQty := 0
 	remainingSize := originalSize
 	if finalOrder != nil {
-		filledQty = finalOrder.Size - finalOrder.UnfilledSize
 		remainingSize = finalOrder.UnfilledSize
 	}
 
@@ -384,8 +382,8 @@ func (c *Client) PlaceLimitOrderWithFallback(req *OrderRequest, symbol string, t
 	}
 
 	// Place market order for remaining size
-	// IMPORTANT: If any quantity was already filled, do NOT attach bracket fields
-	// to avoid duplicate SL/TP orders
+	// We MUST attach bracket fields to this new order to ensure the remaining quantity
+	// is also protected. The previous fill has its own bracket orders.
 	marketReq := &OrderRequest{
 		ProductID: req.ProductID,
 		Size:      remainingSize,
@@ -393,8 +391,7 @@ func (c *Client) PlaceLimitOrderWithFallback(req *OrderRequest, symbol string, t
 		OrderType: "market_order",
 	}
 
-	// Only attach bracket if nothing was filled (no partial fill scenario)
-	if filledQty == 0 && hasBracket {
+	if hasBracket {
 		marketReq.BracketStopLossPrice = originalSL
 		marketReq.BracketStopLossLimitPrice = originalSLLimit
 		marketReq.BracketTakeProfitPrice = originalTP

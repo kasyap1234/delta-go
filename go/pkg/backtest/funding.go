@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -42,7 +43,7 @@ func (f *FundingFetcher) FetchFundingRates(symbol string, start, end time.Time) 
 	// Try Binance funding rates (free, no API key required)
 	rates, err := f.fetchFromBinance(externalSymbol, start, end)
 	if err == nil && len(rates) > 0 {
-		// Save to cache
+		sortFundingRates(rates)
 		f.saveToCache(symbol, start, end, rates)
 		return rates, nil
 	}
@@ -50,6 +51,7 @@ func (f *FundingFetcher) FetchFundingRates(symbol string, start, end time.Time) 
 	// Try Coinglass as fallback
 	rates, err = f.fetchFromCoinglass(externalSymbol, start, end)
 	if err == nil && len(rates) > 0 {
+		sortFundingRates(rates)
 		f.saveToCache(symbol, start, end, rates)
 		return rates, nil
 	}
@@ -59,6 +61,12 @@ func (f *FundingFetcher) FetchFundingRates(symbol string, start, end time.Time) 
 	fmt.Printf("Warning: using synthetic funding rates for %s\n", symbol)
 	rates = f.generateSyntheticRates(symbol, start, end)
 	return rates, nil
+}
+
+func sortFundingRates(rates []FundingRate) {
+	sort.Slice(rates, func(i, j int) bool {
+		return rates[i].Timestamp.Before(rates[j].Timestamp)
+	})
 }
 
 // mapToExternalSymbol converts Delta symbols to exchange symbols
@@ -274,8 +282,25 @@ func GetFundingAtTime(rates []FundingRate, t time.Time) float64 {
 // IsFundingTime checks if the given time is a funding payment time
 // Funding is paid every 8 hours: 00:00, 08:00, 16:00 UTC
 func IsFundingTime(t time.Time) bool {
-	hour := t.UTC().Hour()
-	return hour == 0 || hour == 8 || hour == 16
+	u := t.UTC()
+	if !(u.Hour() == 0 || u.Hour() == 8 || u.Hour() == 16) {
+		return false
+	}
+	return u.Minute() == 0 && u.Second() == 0
+}
+
+// IsFundingWindow checks if the time is within a 5-minute window of a funding time
+func IsFundingWindow(t time.Time, prevTs time.Time) bool {
+	u := t.UTC()
+	if !(u.Hour() == 0 || u.Hour() == 8 || u.Hour() == 16) {
+		return false
+	}
+	// Only trigger if we just crossed into this hour
+	if u.Minute() > 5 {
+		return false
+	}
+	// Check if previous timestamp was in a different hour
+	return prevTs.UTC().Hour() != u.Hour()
 }
 
 // NextFundingTime returns the next funding time after t

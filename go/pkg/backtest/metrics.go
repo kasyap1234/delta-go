@@ -335,7 +335,8 @@ func (mc *MetricsCalculator) computeTradingStats(m *Metrics) {
 func (mc *MetricsCalculator) computeCosts(m *Metrics) {
 	for _, t := range mc.trades {
 		m.TotalFees += t.EntryFee + t.ExitFee
-		m.TotalSlippage += t.EntrySlip + t.ExitSlip
+		// Use slippage COSTS (in dollars), not slippage price deltas
+		m.TotalSlippage += t.EntrySlipCost + t.ExitSlipCost
 		m.TotalFunding += t.FundingPaid
 	}
 	m.TotalCosts = m.TotalFees + m.TotalSlippage + m.TotalFunding
@@ -343,7 +344,9 @@ func (mc *MetricsCalculator) computeCosts(m *Metrics) {
 	// Gross profit (before costs)
 	grossProfit := 0.0
 	for _, t := range mc.trades {
-		grossProfit += t.GrossPnL
+		if t.GrossPnL > 0 {
+			grossProfit += t.GrossPnL
+		}
 	}
 	if grossProfit > 0 {
 		m.CostPct = m.TotalCosts / grossProfit

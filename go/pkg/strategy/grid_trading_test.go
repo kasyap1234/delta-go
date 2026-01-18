@@ -45,7 +45,7 @@ func TestGridTrading_Analyze_Activation(t *testing.T) {
 		BestAsk:       50050,
 	}
 	sig := g.Analyze(f, nil)
-	if g.isActive {
+	if g.IsActive {
 		t.Error("Grid should not be active when vol > 30%")
 	}
 	if sig.Action != ActionNone {
@@ -55,14 +55,14 @@ func TestGridTrading_Analyze_Activation(t *testing.T) {
 	// 2. Volatility in range (20%)
 	f.HistoricalVol = 0.20
 	g.Analyze(f, nil)
-	if !g.isActive {
+	if !g.IsActive {
 		t.Error("Grid should be active when vol < 30%")
 	}
 
 	// 3. Volatility spikes (70%) -> Deactivation
 	f.HistoricalVol = 0.70
 	sig = g.Analyze(f, nil)
-	if g.isActive {
+	if g.IsActive {
 		t.Error("Grid should deactivate when vol > 50%")
 	}
 	if sig.Action != ActionClose {

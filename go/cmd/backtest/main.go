@@ -119,54 +119,25 @@ func registerStrategies(engine *backtest.Engine, strategyType string) {
 
 	case "funding":
 		funding := strategy.NewFundingArbitrageStrategy(strategy.DefaultFundingArbitrageConfig())
-		// Wrap to implement Strategy interface
-		engine.RegisterStrategy(&fundingWrapper{funding})
+		engine.RegisterStrategy(funding)
 
 	case "grid":
-		grid := strategy.NewGridTradingStrategy(strategy.DefaultGridConfig(), "BTCUSD")
-		engine.RegisterStrategy(&gridWrapper{grid})
+		grid := strategy.NewGridTradingStrategy(strategy.DefaultGridConfig(), "BTCUSD") // Default symbol
+		engine.RegisterStrategy(grid)
 
 	case "all":
-		// Register all strategies
+		// Register StrategySelector which combines all three
 		scalper := strategy.NewFeeAwareScalper(strategy.DefaultScalperConfig(), featuresEngine)
-		engine.RegisterStrategy(scalper)
-
 		funding := strategy.NewFundingArbitrageStrategy(strategy.DefaultFundingArbitrageConfig())
-		engine.RegisterStrategy(&fundingWrapper{funding})
+		grid := strategy.NewGridTradingStrategy(strategy.DefaultGridConfig(), "BTCUSD")
+		
+		selector := strategy.NewStrategySelector(scalper, funding, grid)
+		engine.RegisterStrategy(selector)
 
 	default:
 		fmt.Printf("Unknown strategy: %s\n", strategyType)
 		os.Exit(1)
 	}
-}
-
-// Wrappers to adapt strategies to the Strategy interface
-
-type fundingWrapper struct {
-	*strategy.FundingArbitrageStrategy
-}
-
-func (w *fundingWrapper) Analyze(candles []delta.Candle, regime delta.MarketRegime) strategy.Signal {
-	// Funding strategy needs features, not just candles
-	// Return no signal when used via standard interface
-	return strategy.Signal{Action: strategy.ActionNone, Reason: "funding requires features"}
-}
-
-func (w *fundingWrapper) UpdateParams(params map[string]interface{}) {
-	w.FundingArbitrageStrategy.UpdateParams(params)
-}
-
-type gridWrapper struct {
-	*strategy.GridTradingStrategy
-}
-
-func (w *gridWrapper) Analyze(candles []delta.Candle, regime delta.MarketRegime) strategy.Signal {
-	// Grid strategy needs features, not just candles
-	return strategy.Signal{Action: strategy.ActionNone, Reason: "grid requires features"}
-}
-
-func (w *gridWrapper) UpdateParams(params map[string]interface{}) {
-	w.GridTradingStrategy.UpdateParams(params)
 }
 
 func outputJSON(data interface{}) {

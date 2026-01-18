@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/kasyap/delta-go/go/pkg/delta"
+	"github.com/kasyap/delta-go/go/pkg/features"
 )
 
 // Signal represents a trading signal
@@ -16,27 +17,17 @@ type Signal struct {
 	StopLoss   float64
 	TakeProfit float64
 	Reason     string
+	IsHedged   bool
 }
 
-// SignalAction represents what action to take
-type SignalAction string
-
-const (
-	ActionNone       SignalAction = "none"
-	ActionBuy        SignalAction = "buy"
-	ActionSell       SignalAction = "sell"
-	ActionClose      SignalAction = "close"
-	ActionReduceSize SignalAction = "reduce"
-)
-
-// Strategy interface that all strategies must implement
+// Strategy interface for backtest compatibility
 type Strategy interface {
 	Name() string
-	Analyze(candles []delta.Candle, regime delta.MarketRegime) Signal
+	Analyze(f features.MarketFeatures, candles []delta.Candle) Signal
 	UpdateParams(params map[string]interface{})
 }
 
-// Manager manages multiple strategies and selects based on regime
+// Manager manages multiple strategies for backtest compatibility
 type Manager struct {
 	mu               sync.RWMutex
 	strategies       map[string]Strategy
@@ -66,10 +57,15 @@ func (m *Manager) SetRegimeStrategy(regime delta.MarketRegime, strategyName stri
 }
 
 // GetSignal gets a trading signal for the given regime (thread-safe)
-func (m *Manager) GetSignal(candles []delta.Candle, regime delta.MarketRegime) Signal {
+func (m *Manager) GetSignal(f features.MarketFeatures, candles []delta.Candle) Signal {
 	m.mu.RLock()
-	strategyName, ok := m.regimeStrategies[regime]
+	// Attempt to get strategy for current regime
+	// MarketFeatures likely contains regime info, but for legacy Manager support
+	// we might need to rely on what's passed or default.
+	// Let's assume f.HMMRegime is the key if available, otherwise default.
+	strategyName, ok := m.regimeStrategies[f.HMMRegime]
 	if !ok {
+		// Fallback: just pick the first one
 		for name := range m.strategies {
 			strategyName = name
 			break
@@ -82,8 +78,19 @@ func (m *Manager) GetSignal(candles []delta.Candle, regime delta.MarketRegime) S
 		return Signal{Action: ActionNone, Reason: "no strategy available"}
 	}
 
-	return strategy.Analyze(candles, regime)
+	return strategy.Analyze(f, candles)
 }
+
+// SignalAction represents what action to take
+type SignalAction string
+
+const (
+	ActionNone       SignalAction = "none"
+	ActionBuy        SignalAction = "buy"
+	ActionSell       SignalAction = "sell"
+	ActionClose      SignalAction = "close"
+	ActionReduceSize SignalAction = "reduce"
+)
 
 // TechnicalIndicators provides common technical analysis functions
 type TechnicalIndicators struct{}

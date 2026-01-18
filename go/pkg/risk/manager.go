@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"strconv"
 	"sync"
 	"time"
 
@@ -157,11 +156,9 @@ func (rm *RiskManager) CalculatePositionSize(
 	regimeMultiplier := rm.getRegimeMultiplier(regime)
 	adjustedRisk := riskAmount * regimeMultiplier
 
-	contractValue := 1.0
-	if product != nil && product.ContractValue != "" {
-		if cv, err := strconv.ParseFloat(product.ContractValue, 64); err == nil && cv > 0 {
-			contractValue = cv
-		}
+	contractValue, err := delta.ParseContractValue(product)
+	if err != nil {
+		contractValue = 1.0 // Fallback if parsing fails
 	}
 
 	// Calculate risk per contract (in settlement currency units)
@@ -174,11 +171,10 @@ func (rm *RiskManager) CalculatePositionSize(
 		return 0
 	}
 
-	// Calculate number of contracts
-	contracts := adjustedRisk / riskPerContract
-
-	// Round down to integer
-	size := int(math.Floor(contracts))
+	// Calculate number of contracts based on risk
+	// adjustedRisk / riskPerContract gives approximate contracts allowed
+	contractsFloat := adjustedRisk / riskPerContract
+	size := int(math.Floor(contractsFloat))
 
 	// Apply max position limit
 	maxSize := rm.calculateMaxSize(balance, entryPrice, product)
@@ -217,18 +213,14 @@ func (rm *RiskManager) getRegimeMultiplier(regime delta.MarketRegime) float64 {
 // calculateMaxSize calculates maximum position size based on account limits
 func (rm *RiskManager) calculateMaxSize(balance float64, price float64, product *delta.Product) int {
 	// Max position as percentage of balance
-	maxValue := balance * (rm.cfg.MaxPositionPct / 100) * float64(rm.cfg.Leverage)
+	maxNotional := balance * (rm.cfg.MaxPositionPct / 100) * float64(rm.cfg.Leverage)
 
-	// Parse contract value
-	contractValue := 1.0
-	if product != nil && product.ContractValue != "" {
-		if cv, err := strconv.ParseFloat(product.ContractValue, 64); err == nil {
-			contractValue = cv
-		}
+	// Use helper to convert notional to contracts
+	maxSize, err := delta.NotionalToContracts(maxNotional, price, product)
+	if err != nil {
+		log.Printf("Error calculating max size: %v", err)
+		return 0
 	}
-
-	// Calculate max contracts
-	maxSize := int(maxValue / (price * contractValue))
 
 	return maxSize
 }

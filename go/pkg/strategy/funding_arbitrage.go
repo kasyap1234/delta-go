@@ -3,6 +3,7 @@ package strategy
 import (
 	"time"
 
+	"github.com/kasyap/delta-go/go/pkg/delta"
 	"github.com/kasyap/delta-go/go/pkg/features"
 )
 
@@ -47,7 +48,7 @@ func (s *FundingArbitrageStrategy) Name() string {
 	return "funding_arbitrage"
 }
 
-func (s *FundingArbitrageStrategy) Analyze(f features.MarketFeatures, candles []interface{}) Signal {
+func (s *FundingArbitrageStrategy) Analyze(f features.MarketFeatures, candles []delta.Candle) Signal {
 	if !s.cfg.Enabled {
 		return Signal{Action: ActionNone, Reason: "funding arb disabled"}
 	}
@@ -88,6 +89,7 @@ func (s *FundingArbitrageStrategy) Analyze(f features.MarketFeatures, candles []
 			Side:       side,
 			Confidence: 0.65,
 			Reason:     "high funding rate opportunity",
+			IsHedged:   true,
 		}
 	}
 
@@ -123,11 +125,6 @@ func (s *FundingArbitrageStrategy) IsEnabled() bool {
 	return s.cfg.Enabled
 }
 
-// Satisfy Strategy interface
-func (s *FundingArbitrageStrategy) AnalyzeWithLegs(f features.MarketFeatures, candles []interface{}) Signal {
+func (s *FundingArbitrageStrategy) AnalyzeWithLegs(f features.MarketFeatures, candles []delta.Candle) Signal {
 	return s.Analyze(f, candles)
-}
-
-func (s *FundingArbitrageStrategy) AnalyzeCandles(candles []interface{}, regime interface{}) Signal {
-	return Signal{Action: ActionNone, Reason: "use AnalyzeWithFeatures"}
 }

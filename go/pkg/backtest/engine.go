@@ -21,15 +21,28 @@ type Engine struct {
 	slippage       SlippageModel
 
 	// State
-	equity      float64
-	peakEquity  float64
-	positions   map[string]*Position
-	trades      []Trade
-	equityCurve []EquityPoint
+	equity        float64
+	peakEquity    float64
+	positions     map[string]*Position
+	trades        []Trade
+	equityCurve   []EquityPoint
+	pendingOrders map[string]PendingOrder
+	prevTimestamp time.Time
+	lastPrice     map[string]float64
+
+	// Margin tracking
+	usedMargin float64 // Total margin currently in use
 
 	// Data
 	candles      map[string][]delta.Candle
 	fundingRates map[string][]FundingRate
+}
+
+// PendingOrder represents a signal to execute on the next bar
+type PendingOrder struct {
+	Signal     strategy.Signal
+	SignalTime time.Time
+	Symbol     string
 }
 
 // NewEngine creates a new backtesting engine
@@ -44,6 +57,8 @@ func NewEngine(config Config, client *delta.Client) *Engine {
 		equity:         config.InitialCapital,
 		peakEquity:     config.InitialCapital,
 		positions:      make(map[string]*Position),
+		pendingOrders:  make(map[string]PendingOrder),
+		lastPrice:      make(map[string]float64),
 		candles:        make(map[string][]delta.Candle),
 		fundingRates:   make(map[string][]FundingRate),
 	}
@@ -142,6 +157,7 @@ func (e *Engine) simulate() error {
 		if err := e.processTimestamp(ts); err != nil {
 			return fmt.Errorf("error at %v: %w", ts, err)
 		}
+		e.prevTimestamp = ts
 
 		// Progress update every 10%
 		if i%(len(timestamps)/10+1) == 0 {
@@ -185,109 +201,93 @@ func (e *Engine) getUniqueTimestamps() []time.Time {
 
 // processTimestamp handles all events at a single timestamp
 func (e *Engine) processTimestamp(ts time.Time) error {
-	// 1. Check funding payments
-	if e.config.SimulateFunding && IsFundingTime(ts) {
+	// 1. FIRST: Process funding payments for positions that were open BEFORE this bar
+	// This ensures positions held through funding time receive their payment
+	if e.config.SimulateFunding && e.shouldProcessFunding(ts) {
 		e.processFunding(ts)
 	}
 
-	// 2. Check stop-loss and take-profit for open positions
+	// 2. Execute pending orders from previous bar at THIS bar's open
+	e.executePendingOrders(ts)
+
+	// 3. Check stop-loss and take-profit for open positions
 	e.checkExits(ts)
 
-	// 3. Generate signals for each symbol
+	// 4. Generate signals for each symbol (will be executed NEXT bar)
 	for _, symbol := range e.config.Symbols {
 		candle := e.getCandleAt(symbol, ts)
 		if candle == nil {
 			continue
 		}
 
-		// Get signal - try funding arbitrage first (uses historical funding rates)
-		signal := e.getFundingArbitrageSignal(symbol, ts, candle)
+		// Store last price for equity curve
+		e.lastPrice[symbol] = candle.Close
 
-		// If no funding signal, try standard strategy
-		if signal.Action == strategy.ActionNone {
-			candles := e.getRecentCandles(symbol, ts, 200)
-			mf := e.buildMarketFeatures(symbol, candle, candles)
-			signal = e.strategyMgr.GetSignal(candles, mf.HMMRegime)
-		}
+		// Get signal from Strategy Manager
+		candles := e.getRecentCandles(symbol, ts, 200)
+		mf := e.buildMarketFeatures(symbol, candle, candles, ts)
+		signal := e.strategyMgr.GetSignal(mf, candles)
 
-		// Process signal
+		// Queue signal for execution on NEXT bar
 		if signal.Action != strategy.ActionNone {
-			e.processSignal(symbol, signal, candle, ts)
+			e.pendingOrders[symbol] = PendingOrder{
+				Signal:     signal,
+				SignalTime: ts,
+				Symbol:     symbol,
+			}
 		}
 	}
 
-	// 4. Update equity curve
+	// 5. Update equity curve
 	e.updateEquityCurve(ts)
 
 	return nil
 }
 
-// getFundingArbitrageSignal generates signals based on historical funding rates
-func (e *Engine) getFundingArbitrageSignal(symbol string, ts time.Time, candle *delta.Candle) strategy.Signal {
-	// Get current funding rate
-	rate := GetFundingAtTime(e.fundingRates[symbol], ts)
-
-	// Annualize: rate is per 8h, so multiply by 3*365
-	annualizedRate := rate * 3 * 365
-
-	// Check existing position
-	pos := e.positions[symbol]
-
-	// Entry threshold: 15% annualized
-	entryThreshold := 0.15
-	// Exit threshold: 5% annualized
-	exitThreshold := 0.05
-
-	// If we have a position, check exit conditions
-	if pos != nil {
-		// Exit if funding dropped below threshold
-		if absFloat(annualizedRate) < exitThreshold {
-			return strategy.Signal{
-				Action:     strategy.ActionClose,
-				Side:       oppositeSide(pos.Side),
-				Confidence: 0.8,
-				Reason:     "funding dropped below exit threshold",
-			}
+// executePendingOrders executes queued orders at the current bar's open
+func (e *Engine) executePendingOrders(ts time.Time) {
+	for symbol, order := range e.pendingOrders {
+		candle := e.getCandleAt(symbol, ts)
+		if candle == nil {
+			continue // Keep order pending if no candle
 		}
-		// Hold position
-		return strategy.Signal{Action: strategy.ActionNone, Reason: "holding funding position"}
+
+		// Execute at THIS bar's open (not close!)
+		e.processSignalAtPrice(symbol, order.Signal, candle, ts, candle.Open)
+
+		// Remove from pending
+		delete(e.pendingOrders, symbol)
 	}
-
-	// Entry conditions: high absolute funding rate
-	if absFloat(annualizedRate) > entryThreshold {
-		side := "sell" // Positive funding -> short to earn
-		action := strategy.ActionSell
-		if annualizedRate < 0 {
-			side = "buy" // Negative funding -> long to earn
-			action = strategy.ActionBuy
-		}
-
-		// Set stop loss and take profit based on price
-		stopDist := candle.Close * 0.02 // 2% stop
-		takeDist := candle.Close * 0.04 // 4% take profit
-
-		var stopLoss, takeProfit float64
-		if side == "buy" {
-			stopLoss = candle.Close - stopDist
-			takeProfit = candle.Close + takeDist
-		} else {
-			stopLoss = candle.Close + stopDist
-			takeProfit = candle.Close - takeDist
-		}
-
-		return strategy.Signal{
-			Action:     action,
-			Side:       side,
-			Confidence: 0.65,
-			Price:      candle.Close,
-			StopLoss:   stopLoss,
-			TakeProfit: takeProfit,
-			Reason:     fmt.Sprintf("high funding rate: %.2f%% annualized", annualizedRate*100),
-		}
-	}
-
-	return strategy.Signal{Action: strategy.ActionNone, Reason: "funding below threshold"}
 }
+
+// shouldProcessFunding checks if we crossed a funding boundary since last timestamp
+func (e *Engine) shouldProcessFunding(ts time.Time) bool {
+	if e.prevTimestamp.IsZero() {
+		return false
+	}
+	return crossedFundingBoundary(e.prevTimestamp, ts)
+}
+
+// crossedFundingBoundary checks if we crossed 00:00, 08:00, or 16:00 UTC
+func crossedFundingBoundary(prev, curr time.Time) bool {
+	prevU := prev.UTC()
+	currU := curr.UTC()
+
+	fundingHours := []int{0, 8, 16}
+	for _, h := range fundingHours {
+		fundingTime := time.Date(currU.Year(), currU.Month(), currU.Day(), h, 0, 0, 0, time.UTC)
+		if prevU.Before(fundingTime) && (currU.Equal(fundingTime) || currU.After(fundingTime)) {
+			return true
+		}
+		// Handle day boundary for 00:00
+		if h == 0 && prevU.Day() != currU.Day() {
+			return true
+		}
+	}
+	return false
+}
+
+
 
 func oppositeSide(side string) string {
 	if side == "buy" {
@@ -305,8 +305,7 @@ func (e *Engine) processFunding(ts time.Time) {
 		}
 
 		// Calculate funding payment - Size is NOTIONAL VALUE in dollars
-		notionalValue := float64(pos.Size)
-		payment := notionalValue * rate
+		payment := pos.Size * rate
 
 		// Funding mechanics:
 		// Positive rate: longs pay shorts
@@ -360,8 +359,8 @@ func (e *Engine) checkExits(ts time.Time) {
 	}
 }
 
-// processSignal handles a trading signal
-func (e *Engine) processSignal(symbol string, signal strategy.Signal, candle *delta.Candle, ts time.Time) {
+// processSignalAtPrice handles a trading signal at a specific fill price
+func (e *Engine) processSignalAtPrice(symbol string, signal strategy.Signal, candle *delta.Candle, ts time.Time, fillPrice float64) {
 	// Check if we have an existing position
 	existingPos := e.positions[symbol]
 
@@ -374,58 +373,74 @@ func (e *Engine) processSignal(symbol string, signal strategy.Signal, candle *de
 				return // Same direction, ignore
 			}
 			// Opposite direction - close first
-			e.closePosition(symbol, candle.Close, ts, "signal_reversal")
+			e.closePositionAtPrice(symbol, fillPrice, ts, "signal_reversal", candle)
 		}
 		// Open new position
-		e.openPosition(symbol, signal, candle, ts)
+		e.openPositionAtPrice(symbol, signal, candle, ts, fillPrice)
 
 	case strategy.ActionClose:
 		if existingPos != nil {
-			e.closePosition(symbol, candle.Close, ts, "signal_close")
+			e.closePositionAtPrice(symbol, fillPrice, ts, "signal_close", candle)
 		}
 	}
 }
 
-// openPosition opens a new position
-func (e *Engine) openPosition(symbol string, signal strategy.Signal, candle *delta.Candle, ts time.Time) {
-	// 1. Calculate orientation first to get size
-	entryPrice := candle.Close // Starting point
-
-	// 2. Calculate position size based on equity and risk
-	size := e.calculatePositionSize(entryPrice, signal.StopLoss)
+// openPositionAtPrice opens a new position at a specific fill price
+func (e *Engine) openPositionAtPrice(symbol string, signal strategy.Signal, candle *delta.Candle, ts time.Time, fillPrice float64) {
+	// 1. Calculate position size based on equity and risk
+	size := e.calculatePositionSize(fillPrice, signal.StopLoss)
 	if size <= 0 {
 		return
 	}
 
+	// 2. Check if we have enough margin
+	requiredMargin := e.calculateRequiredMargin(size)
+	if requiredMargin > e.getAvailableMargin() {
+		return // Not enough margin
+	}
+
 	// 3. Calculate slippage based on ACTUAL size
 	slippageAmt := e.slippage.Calculate(signal.Side, size, *candle, 0)
-	actualEntryPrice := ApplySlippage(entryPrice, slippageAmt, signal.Side)
+	actualEntryPrice := ApplySlippage(fillPrice, slippageAmt, signal.Side)
 
 	// 4. Calculate fee based on ACTUAL size (notional)
 	fee := CalculateFee(actualEntryPrice, size, 1.0, e.config.TakerFeeBps)
 
+	// 5. Reserve margin
+	e.usedMargin += requiredMargin
+
 	pos := &Position{
-		Symbol:     symbol,
-		Side:       signal.Side,
-		Size:       size,
-		EntryPrice: actualEntryPrice,
-		EntryTime:  ts,
-		StopLoss:   signal.StopLoss,
-		TakeProfit: signal.TakeProfit,
-		EntryFee:   fee,
-		EntrySlip:  slippageAmt,
+		Symbol:        symbol,
+		Side:          signal.Side,
+		Size:          size,
+		EntryPrice:    actualEntryPrice,
+		EntryTime:     ts,
+		StopLoss:      signal.StopLoss,
+		TakeProfit:    signal.TakeProfit,
+		InitialMargin: requiredMargin,
+		EntryFee:      fee,
+		EntrySlip:     slippageAmt,
 	}
 
 	e.positions[symbol] = pos
 	e.equity -= fee
 }
 
-// closePosition closes an existing position
+// closePosition closes an existing position (used by checkExits)
 func (e *Engine) closePosition(symbol string, exitPrice float64, ts time.Time, reason string) {
+	candle := e.getCandleAt(symbol, ts)
+	e.closePositionAtPrice(symbol, exitPrice, ts, reason, candle)
+}
+
+// closePositionAtPrice closes an existing position at a specific fill price
+func (e *Engine) closePositionAtPrice(symbol string, exitPrice float64, ts time.Time, reason string, candle *delta.Candle) {
 	pos := e.positions[symbol]
 	if pos == nil {
 		return
 	}
+
+	// Release margin
+	e.usedMargin -= pos.InitialMargin
 
 	// Apply slippage to exit
 	exitSide := "sell"
@@ -433,7 +448,6 @@ func (e *Engine) closePosition(symbol string, exitPrice float64, ts time.Time, r
 		exitSide = "buy"
 	}
 
-	candle := e.getCandleAt(symbol, ts)
 	slippageAmt := 0.0
 	if candle != nil {
 		slippageAmt = e.slippage.Calculate(exitSide, pos.Size, *candle, 0)
@@ -455,29 +469,39 @@ func (e *Engine) closePosition(symbol string, exitPrice float64, ts time.Time, r
 	}
 
 	// Size IS the notional value in dollars
-	positionValue := float64(pos.Size)
-	grossPnL := positionValue * pricePctChange * multiplier
-	// Note: EntryFee already deducted at entry (line 420), FundingPaid already applied in processFunding()
-	netPnL := grossPnL - exitFee
+	grossPnL := pos.Size * pricePctChange * multiplier
+
+	// Calculate slippage cost in dollars (slippage is in price units, convert to notional impact)
+	// For entry: slippage * (notional / entry_price) = cost
+	entrySlipCost := pos.EntrySlip * (pos.Size / pos.EntryPrice)
+	exitSlipCost := slippageAmt * (pos.Size / actualExitPrice)
+
+	// NetPnL includes ALL costs: entry fee, exit fee, slippage costs, and funding
+	// Note: EntryFee was deducted from equity at entry time, so we don't subtract it again here
+	// FundingPaid was also applied to equity in processFunding(), so we don't subtract it again
+	// But we DO record them in the trade for accurate metrics reporting
+	netPnL := grossPnL - exitFee - entrySlipCost - exitSlipCost
 
 	// Record trade
 	trade := Trade{
-		ID:          fmt.Sprintf("%s-%d", symbol, len(e.trades)),
-		Symbol:      symbol,
-		Side:        pos.Side,
-		Size:        pos.Size,
-		EntryPrice:  pos.EntryPrice,
-		EntryTime:   pos.EntryTime,
-		EntryFee:    pos.EntryFee,
-		EntrySlip:   pos.EntrySlip,
-		ExitPrice:   actualExitPrice,
-		ExitTime:    ts,
-		ExitFee:     exitFee,
-		ExitSlip:    slippageAmt,
-		FundingPaid: pos.FundingPaid,
-		GrossPnL:    grossPnL,
-		NetPnL:      netPnL,
-		Reason:      reason,
+		ID:            fmt.Sprintf("%s-%d", symbol, len(e.trades)),
+		Symbol:        symbol,
+		Side:          pos.Side,
+		Size:          pos.Size,
+		EntryPrice:    pos.EntryPrice,
+		EntryTime:     pos.EntryTime,
+		EntryFee:      pos.EntryFee,
+		EntrySlip:     pos.EntrySlip,
+		ExitPrice:     actualExitPrice,
+		ExitTime:      ts,
+		ExitFee:       exitFee,
+		ExitSlip:      slippageAmt,
+		EntrySlipCost: entrySlipCost,
+		ExitSlipCost:  exitSlipCost,
+		FundingPaid:   pos.FundingPaid,
+		GrossPnL:      grossPnL,
+		NetPnL:        netPnL,
+		Reason:        reason,
 	}
 	e.trades = append(e.trades, trade)
 
@@ -488,12 +512,27 @@ func (e *Engine) closePosition(symbol string, exitPrice float64, ts time.Time, r
 	delete(e.positions, symbol)
 }
 
+// calculateRequiredMargin calculates initial margin for a position
+func (e *Engine) calculateRequiredMargin(notional float64) float64 {
+	return notional / float64(e.config.Leverage)
+}
+
+// getAvailableMargin returns the margin available for new positions
+func (e *Engine) getAvailableMargin() float64 {
+	return e.equity - e.usedMargin
+}
+
 // calculatePositionSize determines position size based on risk
 // Returns the NOTIONAL VALUE in dollars (not contract count!)
 // This value divided by entry price gives the "contract equivalent"
-func (e *Engine) calculatePositionSize(entryPrice, stopLoss float64) int {
+func (e *Engine) calculatePositionSize(entryPrice, stopLoss float64) float64 {
 	// Don't trade if equity is too low or negative
 	if e.equity <= 10 {
+		return 0
+	}
+
+	availableMargin := e.getAvailableMargin()
+	if availableMargin <= 0 {
 		return 0
 	}
 
@@ -501,8 +540,8 @@ func (e *Engine) calculatePositionSize(entryPrice, stopLoss float64) int {
 	riskPct := 0.02
 	riskAmount := e.equity * riskPct
 
-	// Calculate max position value based on leverage
-	maxPositionValue := e.equity * float64(e.config.Leverage)
+	// Calculate max position value based on AVAILABLE margin and leverage
+	maxPositionValue := availableMargin * float64(e.config.Leverage)
 
 	// Calculate position size based on stop distance
 	if stopLoss > 0 && entryPrice > 0 {
@@ -519,16 +558,16 @@ func (e *Engine) calculatePositionSize(entryPrice, stopLoss float64) int {
 			}
 
 			// Return notional value (we'll treat Size as notional dollars)
-			return int(positionValue)
+			return positionValue
 		}
 	}
 
-	// Default: 10% of equity as position value
-	defaultValue := e.equity * 0.10
+	// Default: 10% of available margin as position value
+	defaultValue := availableMargin * 0.10 * float64(e.config.Leverage)
 	if defaultValue > maxPositionValue {
 		defaultValue = maxPositionValue
 	}
-	return int(defaultValue)
+	return defaultValue
 }
 
 // updateEquityCurve records current equity point
@@ -538,9 +577,18 @@ func (e *Engine) updateEquityCurve(ts time.Time) {
 
 	for symbol, pos := range e.positions {
 		candle := e.getCandleAt(symbol, ts)
+		var markPrice float64
 		if candle != nil {
-			totalEquity += pos.UnrealizedPnL(candle.Close, 1.0)
+			markPrice = candle.Close
+			e.lastPrice[symbol] = markPrice
+		} else if lastPrice, ok := e.lastPrice[symbol]; ok {
+			// Use last known price if no candle at this timestamp
+			markPrice = lastPrice
+		} else {
+			// Fallback to entry price if no price history
+			markPrice = pos.EntryPrice
 		}
+		totalEquity += pos.UnrealizedPnL(markPrice, 1.0)
 	}
 
 	// Update peak
@@ -592,7 +640,7 @@ func (e *Engine) getRecentCandles(symbol string, beforeTs time.Time, count int) 
 	return result
 }
 
-func (e *Engine) buildMarketFeatures(symbol string, candle *delta.Candle, candles []delta.Candle) features.MarketFeatures {
+func (e *Engine) buildMarketFeatures(symbol string, candle *delta.Candle, candles []delta.Candle, ts time.Time) features.MarketFeatures {
 	// Create synthetic ticker from candle
 	ticker := &delta.Ticker{
 		Symbol:    symbol,
@@ -602,6 +650,11 @@ func (e *Engine) buildMarketFeatures(symbol string, candle *delta.Candle, candle
 		Open:      candle.Open,
 		MarkPrice: candle.Close,
 		Volume:    candle.Volume,
+	}
+
+	// Attach funding rate if available
+	if e.config.SimulateFunding {
+		ticker.FundingRate = GetFundingAtTime(e.fundingRates[symbol], ts)
 	}
 
 	// Use features engine

@@ -47,13 +47,7 @@ func (d *DriverSelector) GetFeatureEngine() *features.Engine {
 }
 
 func (d *DriverSelector) SelectStrategy(f features.MarketFeatures, candles []delta.Candle) (SelectedStrategy, Signal) {
-	// Convert candle slice for strategy selector
-	var ifaceCandles []interface{}
-	for _, c := range candles {
-		ifaceCandles = append(ifaceCandles, c)
-	}
-
-	name, signal := d.selector.SelectBest(f, ifaceCandles)
+	name, signal := d.selector.SelectBest(f, candles)
 
 	return SelectedStrategy{
 		Name:           name,

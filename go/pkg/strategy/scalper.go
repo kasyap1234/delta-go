@@ -23,7 +23,7 @@ type ScalperConfig struct {
 func DefaultScalperConfig() ScalperConfig {
 	return ScalperConfig{
 		ImbalanceThreshold:   0.5,
-		PersistenceSnapshots: 5,
+		PersistenceSnapshots: 2,
 		MinSpreadBps:         1.0,
 		MaxSpreadBps:         10.0,
 		TargetProfitBps:      20.0,
@@ -55,10 +55,6 @@ func (s *FeeAwareScalper) Name() string {
 	return "fee_aware_scalper"
 }
 
-func (s *FeeAwareScalper) Analyze(candles []delta.Candle, regime delta.MarketRegime) Signal {
-	return Signal{Action: ActionNone, Reason: "use AnalyzeWithFeatures"}
-}
-
 func (s *FeeAwareScalper) UpdateParams(params map[string]interface{}) {
 	if v, ok := params["imbalance_threshold"].(float64); ok {
 		s.cfg.ImbalanceThreshold = v
@@ -71,9 +67,13 @@ func (s *FeeAwareScalper) UpdateParams(params map[string]interface{}) {
 	}
 }
 
-func (s *FeeAwareScalper) AnalyzeWithFeatures(f features.MarketFeatures, candles []delta.Candle) Signal {
+func (s *FeeAwareScalper) Analyze(f features.MarketFeatures, candles []delta.Candle) Signal {
 	if !s.cfg.Enabled {
 		return Signal{Action: ActionNone, Reason: "scalper disabled"}
+	}
+
+	if f.HistoricalVol < 0.10 {
+		return Signal{Action: ActionNone, Reason: "volatility too low for scalping"}
 	}
 
 	if f.SpreadBps < s.cfg.MinSpreadBps {

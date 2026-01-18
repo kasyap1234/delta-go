@@ -64,15 +64,15 @@ func TestApplySlippage(t *testing.T) {
 }
 
 func TestCalculateFee(t *testing.T) {
-	price := 50000.0
-	size := 10
-	contractValue := 1.0
+	// Note: size is NOTIONAL VALUE in dollars, not contract count
+	// For a position worth $10,000 at 5 bps (0.05%) fee
+	notionalValue := 10000.0
 	feeBps := 5.0 // 0.05%
 
-	fee := CalculateFee(price, size, contractValue, feeBps)
+	fee := CalculateFee(50000.0, notionalValue, 1.0, feeBps)
 
-	// Expected: 50000 * 10 * 1 * 5/10000 = 250
-	expected := 250.0
+	// Expected: 10000 * 5/10000 = $5
+	expected := 5.0
 	if abs(fee-expected) > 0.01 {
 		t.Errorf("Expected fee %.2f, got %.2f", expected, fee)
 	}
@@ -81,7 +81,7 @@ func TestCalculateFee(t *testing.T) {
 func TestPositionUnrealizedPnL(t *testing.T) {
 	pos := &Position{
 		Side:       "buy",
-		Size:       10,
+		Size:       10.0,
 		EntryPrice: 50000,
 	}
 
@@ -97,7 +97,7 @@ func TestPositionUnrealizedPnL(t *testing.T) {
 	// Short position
 	shortPos := &Position{
 		Side:       "sell",
-		Size:       10,
+		Size:       10.0,
 		EntryPrice: 50000,
 	}
 

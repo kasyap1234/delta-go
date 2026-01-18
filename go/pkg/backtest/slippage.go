@@ -9,7 +9,7 @@ import (
 // SlippageModel defines how slippage is calculated
 type SlippageModel interface {
 	// Calculate returns slippage in price terms (always positive)
-	Calculate(side string, size int, candle delta.Candle, volatility float64) float64
+	Calculate(side string, size float64, candle delta.Candle, volatility float64) float64
 }
 
 // ---------------------- Fixed Slippage ----------------------
@@ -24,7 +24,7 @@ func NewFixedSlippage(bps float64) *FixedSlippage {
 	return &FixedSlippage{Bps: bps}
 }
 
-func (s *FixedSlippage) Calculate(side string, size int, candle delta.Candle, volatility float64) float64 {
+func (s *FixedSlippage) Calculate(side string, size float64, candle delta.Candle, volatility float64) float64 {
 	mid := (candle.High + candle.Low) / 2
 	return mid * (s.Bps / 10000)
 }
@@ -46,7 +46,7 @@ func NewVolatilitySlippage(baseBps, volFactor float64) *VolatilitySlippage {
 	}
 }
 
-func (s *VolatilitySlippage) Calculate(side string, size int, candle delta.Candle, volatility float64) float64 {
+func (s *VolatilitySlippage) Calculate(side string, size float64, candle delta.Candle, volatility float64) float64 {
 	mid := (candle.High + candle.Low) / 2
 
 	// Intrabar volatility as proxy (high-low range as % of mid)
@@ -77,7 +77,7 @@ func NewVolumeImpactSlippage(baseBps, impactCoeff float64) *VolumeImpactSlippage
 	}
 }
 
-func (s *VolumeImpactSlippage) Calculate(side string, size int, candle delta.Candle, volatility float64) float64 {
+func (s *VolumeImpactSlippage) Calculate(side string, size float64, candle delta.Candle, volatility float64) float64 {
 	mid := (candle.High + candle.Low) / 2
 
 	// Base slippage
@@ -86,7 +86,7 @@ func (s *VolumeImpactSlippage) Calculate(side string, size int, candle delta.Can
 	// Volume impact using square-root model (industry standard)
 	// Reference: Almgren & Chriss market impact model
 	if candle.Volume > 0 {
-		participation := float64(size) / candle.Volume
+		participation := size / candle.Volume
 		impact := s.ImpactCoeff * math.Sqrt(participation) * mid
 		return baseSlip + impact
 	}
@@ -106,7 +106,7 @@ func NewCompositeSlippage(models ...SlippageModel) *CompositeSlippage {
 	return &CompositeSlippage{Models: models}
 }
 
-func (s *CompositeSlippage) Calculate(side string, size int, candle delta.Candle, volatility float64) float64 {
+func (s *CompositeSlippage) Calculate(side string, size float64, candle delta.Candle, volatility float64) float64 {
 	total := 0.0
 	for _, model := range s.Models {
 		total += model.Calculate(side, size, candle, volatility)
@@ -126,8 +126,7 @@ func ApplySlippage(price, slippage float64, side string) float64 {
 
 // CalculateFee computes trading fee
 // Note: size is the NOTIONAL VALUE in dollars, not contract count
-func CalculateFee(price float64, size int, contractValue, feeBps float64) float64 {
+func CalculateFee(price float64, size float64, contractValue, feeBps float64) float64 {
 	// Size is already notional value in dollars
-	notional := float64(size)
-	return notional * (feeBps / 10000)
+	return size * (feeBps / 10000)
 }

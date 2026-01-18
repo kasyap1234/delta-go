@@ -96,19 +96,21 @@ type StructuralBot struct {
 	driverSelector *strategy.DriverSelector
 	perfTracker    *PerformanceTracker
 
-	mu             sync.RWMutex
-	currentProduct *delta.Product
-	candles        map[string][]delta.Candle
-	lastTickers    map[string]*delta.Ticker
-	lastOrderbooks map[string]*delta.Orderbook
-	lastFeatures   map[string]features.MarketFeatures
-	scalpPositions map[string]*ScalpPosition
-	basisPositions map[string]bool
-	isRunning      bool
-	stopChan       chan struct{}
-	stopOnce       sync.Once
-	lastPerfUpdate time.Time
-	productCache   map[string]*delta.Product
+	mu                  sync.RWMutex
+	currentProduct      *delta.Product
+	candles             map[string][]delta.Candle
+	lastTickers         map[string]*delta.Ticker
+	lastOrderbooks      map[string]*delta.Orderbook
+	lastFeatures        map[string]features.MarketFeatures
+	scalpPositions      map[string]*ScalpPosition
+	basisPositions      map[string]bool
+	gridOrderIDToSymbol map[int64]string
+	activeGridSymbol    string
+	isRunning           bool
+	stopChan            chan struct{}
+	stopOnce            sync.Once
+	lastPerfUpdate      time.Time
+	productCache        map[string]*delta.Product
 }
 
 func NewStructuralBot(cfg *config.Config) *StructuralBot {
@@ -136,20 +138,22 @@ func NewStructuralBot(cfg *config.Config) *StructuralBot {
 	}
 
 	return &StructuralBot{
-		cfg:            cfg,
-		deltaClient:    delta.NewClient(cfg),
-		wsClient:       delta.NewWebSocketClient(cfg),
-		riskManager:    risk.NewRiskManager(cfg),
-		driverSelector: strategy.NewDriverSelector(driverCfg),
-		perfTracker:    NewPerformanceTracker(500),
-		candles:        make(map[string][]delta.Candle),
-		lastTickers:    make(map[string]*delta.Ticker),
-		lastOrderbooks: make(map[string]*delta.Orderbook),
-		lastFeatures:   make(map[string]features.MarketFeatures),
-		scalpPositions: make(map[string]*ScalpPosition),
-		basisPositions: make(map[string]bool),
-		stopChan:       make(chan struct{}),
-		productCache:   make(map[string]*delta.Product),
+		cfg:                 cfg,
+		deltaClient:         delta.NewClient(cfg),
+		wsClient:            delta.NewWebSocketClient(cfg),
+		riskManager:         risk.NewRiskManager(cfg),
+		driverSelector:      strategy.NewDriverSelector(driverCfg),
+		perfTracker:         NewPerformanceTracker(500),
+		candles:             make(map[string][]delta.Candle),
+		lastTickers:         make(map[string]*delta.Ticker),
+		lastOrderbooks:      make(map[string]*delta.Orderbook),
+		lastFeatures:        make(map[string]features.MarketFeatures),
+		scalpPositions:      make(map[string]*ScalpPosition),
+		basisPositions:      make(map[string]bool),
+		gridOrderIDToSymbol: make(map[int64]string),
+		activeGridSymbol:    "",
+		stopChan:            make(chan struct{}),
+		productCache:        make(map[string]*delta.Product),
 	}
 }
 
@@ -226,6 +230,7 @@ func (bot *StructuralBot) Start() error {
 	go bot.tradingLoop()
 	go bot.featureUpdateLoop()
 	go bot.scalpExitMonitor()
+	go bot.gridFillMonitor()
 
 	log.Printf("Structural bot started - Symbols: %v", bot.cfg.Symbols)
 	return nil
@@ -269,6 +274,20 @@ func (bot *StructuralBot) scalpExitMonitor() {
 			return
 		case <-ticker.C:
 			bot.checkScalpExits()
+		}
+	}
+}
+
+func (bot *StructuralBot) gridFillMonitor() {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-bot.stopChan:
+			return
+		case <-ticker.C:
+			bot.checkGridFills()
 		}
 	}
 }
@@ -385,7 +404,11 @@ func (bot *StructuralBot) executeScalpEntry(signal strategy.Signal, product *del
 	}
 
 	positionValue := balance * (bot.cfg.MaxPositionPct / 100) * float64(bot.cfg.Leverage)
-	size := int(positionValue / signal.Price)
+	size, err := delta.NotionalToContracts(positionValue, signal.Price, product)
+	if err != nil {
+		log.Printf("Failed to calculate scalp size: %v", err)
+		return
+	}
 	if size < 1 {
 		size = 1
 	}
@@ -424,7 +447,7 @@ func (bot *StructuralBot) executeScalpEntry(signal strategy.Signal, product *del
 	// Track entry in scalper for fee windows
 	scalper.RecordEntry(symbol)
 
-	log.Printf("[%s] Scalp entry: %s %d @ %.2f (SL: %s, TP: %s)",
+	log.Printf("[%s] Scalp entry: %s %d contracts @ %.2f (SL: %s, TP: %s)",
 		symbol, signal.Side, size, signal.Price, slPrice, tpPrice)
 }
 
@@ -440,15 +463,53 @@ func (bot *StructuralBot) executeFundingArbEntry(signal strategy.Signal, product
 		return
 	}
 
-	positionValue := balance * (bot.cfg.MaxPositionPct / 100) * 5.0
-	size := int(positionValue / signal.Price)
-	if size < 1 {
-		size = 1
+	targetNotional := balance * (bot.cfg.MaxPositionPct / 100) * 5.0
+	perpSize, err := delta.NotionalToContracts(targetNotional, signal.Price, product)
+	if err != nil {
+		log.Printf("Failed to calculate funding arb size: %v", err)
+		return
+	}
+	if perpSize < 1 {
+		perpSize = 1
+	}
+
+	// Hedge Execution Logic (Futures Basis Arb)
+	if signal.IsHedged {
+		futureProduct, err := bot.deltaClient.GetFuturesProductForPerp(product.Symbol)
+		if err != nil {
+			log.Printf("PURE ARBITRAGE BLOCKED: Could not find futures product for %s: %v", product.Symbol, err)
+			return // ABORT to ensure pure arbitrage
+		}
+
+		futureSize, err := delta.NotionalToContracts(targetNotional, signal.Price, futureProduct)
+		if err != nil {
+			log.Printf("PURE ARBITRAGE BLOCKED: Failed to calculate future size: %v", err)
+			return
+		}
+
+		// Place Future Long Order
+		// Marketable limit order
+		futurePriceStr, _ := delta.RoundToTickSize(signal.Price*1.01, futureProduct.TickSize)
+		futureReq := &delta.OrderRequest{
+			ProductID:   futureProduct.ID,
+			Size:        futureSize,
+			Side:        "buy",
+			OrderType:   "limit_order",
+			LimitPrice:  futurePriceStr,
+			TimeInForce: "ioc",
+		}
+
+		futureOrder, err := bot.deltaClient.PlaceOrder(futureReq)
+		if err != nil {
+			log.Printf("PURE ARBITRAGE BLOCKED: Failed to place Future Buy: %v", err)
+			return
+		}
+		log.Printf("[%s] HEDGE: Future Buy Placed: %d contracts (Order: %d)", futureProduct.Symbol, futureSize, futureOrder.ID)
 	}
 
 	req := &delta.OrderRequest{
 		ProductID:   product.ID,
-		Size:        size,
+		Size:        perpSize,
 		Side:        signal.Side,
 		OrderType:   "limit_order",
 		LimitPrice:  fmt.Sprintf("%.2f", signal.Price),
@@ -466,7 +527,7 @@ func (bot *StructuralBot) executeFundingArbEntry(signal strategy.Signal, product
 	bot.mu.Unlock()
 
 	fundingArb.RecordEntry(symbol, signal.Side, 0.0)
-	log.Printf("[%s] Funding Arb entry: %s %d @ %.2f (Order ID: %d)", symbol, signal.Side, size, signal.Price, order.ID)
+	log.Printf("[%s] Funding Arb entry: %s %d contracts @ %.2f (Order ID: %d)", symbol, signal.Side, perpSize, signal.Price, order.ID)
 }
 
 func (bot *StructuralBot) executeGridEntry(signal strategy.Signal, product *delta.Product, symbol string) {
@@ -487,7 +548,12 @@ func (bot *StructuralBot) executeGridEntry(signal strategy.Signal, product *delt
 		return
 	}
 
-	sizePerLevel := int(balance * 0.05 * float64(bot.cfg.Leverage) / levels[0].Price)
+	totalGridNotional := balance * 0.05 * float64(bot.cfg.Leverage)
+	sizePerLevel, err := delta.NotionalToContracts(totalGridNotional, levels[0].Price, product)
+	if err != nil {
+		log.Printf("Failed to calculate grid size: %v", err)
+		return
+	}
 	if sizePerLevel < 1 {
 		sizePerLevel = 1
 	}
@@ -509,15 +575,20 @@ func (bot *StructuralBot) executeGridEntry(signal strategy.Signal, product *delt
 			TimeInForce: "gtc",
 		}
 
-		_, err := bot.deltaClient.PlaceOrder(req)
+		order, err := bot.deltaClient.PlaceOrder(req)
 		if err != nil {
 			log.Printf("[%s] Failed to place grid order at %s: %v", symbol, priceStr, err)
 			continue
 		}
+
+		bot.mu.Lock()
+		bot.gridOrderIDToSymbol[order.ID] = symbol
+		bot.activeGridSymbol = symbol
+		bot.mu.Unlock()
 		placedOrders++
 	}
 
-	log.Printf("[%s] Grid trading activated: placed %d/%d orders", symbol, placedOrders, len(levels))
+	log.Printf("[%s] Grid trading activated: placed %d/%d orders (size: %d contracts)", symbol, placedOrders, len(levels), sizePerLevel)
 }
 
 func (bot *StructuralBot) checkScalpExits() {
@@ -539,6 +610,43 @@ func (bot *StructuralBot) checkScalpExits() {
 
 		if timeRemaining < 30*time.Second && timeRemaining > 0 && feeWindowActive {
 			log.Printf("Fee window expiring in %v for %s - consider closing", timeRemaining, pos.Symbol)
+		}
+	}
+}
+
+func (bot *StructuralBot) checkGridFills() {
+	bot.mu.RLock()
+	gridOrderIDs := make([]int64, 0, len(bot.gridOrderIDToSymbol))
+	for orderID := range bot.gridOrderIDToSymbol {
+		gridOrderIDs = append(gridOrderIDs, orderID)
+	}
+	bot.mu.RUnlock()
+
+	if len(gridOrderIDs) == 0 {
+		return
+	}
+
+	gridTrader := bot.driverSelector.GetGridTrader()
+	if gridTrader == nil {
+		return
+	}
+
+	for _, orderID := range gridOrderIDs {
+		order, err := bot.deltaClient.GetOrderByID(orderID)
+		if err != nil {
+			log.Printf("Failed to get grid order %d: %v", orderID, err)
+			continue
+		}
+
+		if order.State == "filled" || order.State == "closed" {
+			signal := gridTrader.OnFill(orderID)
+			bot.mu.Lock()
+			delete(bot.gridOrderIDToSymbol, orderID)
+			bot.mu.Unlock()
+
+			if signal.Action != strategy.ActionNone {
+				log.Printf("[GRID] Order %d filled: %s", orderID, signal.Reason)
+			}
 		}
 	}
 }

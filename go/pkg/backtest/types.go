@@ -57,11 +57,14 @@ func DefaultConfig() Config {
 type Position struct {
 	Symbol     string
 	Side       string // "buy" or "sell"
-	Size       int
+	Size       float64
 	EntryPrice float64
 	EntryTime  time.Time
 	StopLoss   float64
 	TakeProfit float64
+
+	// Margin tracking
+	InitialMargin float64
 
 	// Accumulated costs
 	EntryFee    float64
@@ -76,7 +79,7 @@ func (p *Position) UnrealizedPnL(currentPrice float64, contractValue float64) fl
 		multiplier = -1.0
 	}
 	priceDiff := (currentPrice - p.EntryPrice) * multiplier
-	return (priceDiff / p.EntryPrice) * float64(p.Size) * contractValue
+	return (priceDiff / p.EntryPrice) * p.Size * contractValue
 }
 
 // Trade represents a completed trade with all costs
@@ -84,7 +87,7 @@ type Trade struct {
 	ID     string
 	Symbol string
 	Side   string
-	Size   int
+	Size   float64
 
 	// Entry
 	EntryPrice float64
@@ -98,12 +101,16 @@ type Trade struct {
 	ExitFee   float64
 	ExitSlip  float64
 
+	// Slippage costs in dollars (not price units)
+	EntrySlipCost float64
+	ExitSlipCost  float64
+
 	// Funding (for perpetuals)
 	FundingPaid float64
 
 	// P&L
 	GrossPnL float64
-	NetPnL   float64
+	NetPnL   float64 // After all costs: fees, slippage costs, funding
 
 	// Exit reason
 	Reason string // "stop_loss", "take_profit", "signal", "timeout"
@@ -134,7 +141,7 @@ type Order struct {
 	ID           string
 	Symbol       string
 	Side         string
-	Size         int
+	Size         float64
 	OrderType    string // "market", "limit"
 	LimitPrice   float64
 	StopLoss     float64
