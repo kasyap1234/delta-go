@@ -752,6 +752,26 @@ func (bot *StructuralBot) updatePerformanceIfDue(force bool, product *delta.Prod
 		Positions:     open,
 	})
 	bot.lastPerfUpdate = time.Now()
+	
+	// Log Heartbeat to Console
+	stats := bot.perfTracker.Report()
+	msg := formatHeartbeat(stats)
+	logger.ConsoleLog("INFO", msg)
+}
+
+func formatHeartbeat(stats map[string]interface{}) string {
+	pnlAbs := stats["pnl_abs"].(float64)
+	pnlPct := stats["pnl_pct"].(float64)
+	positions := stats["open_positions"].(int)
+	equity := stats["last_equity"].(float64)
+	
+	pnlSign := "+"
+	if pnlAbs < 0 {
+		pnlSign = "" // negative number has sign already
+	}
+	
+	return fmt.Sprintf("HEARTBEAT | Eq: %.2f | PnL: %s%.2f (%s%.2f%%) | Pos: %d", 
+		equity, pnlSign, pnlAbs, pnlSign, pnlPct, positions)
 }
 
 func parseFloatOrZero(s string) float64 {
