@@ -22,8 +22,8 @@ func DefaultGridConfig() GridConfig {
 		GridLevels:           10,
 		GridRangePct:         3.0,
 		PositionSizePerLevel: 1,
-		MaxVolatilityPct:     200.0,
-		MinVolatilityPct:     150.0,
+		MaxVolatilityPct:     50.0,
+		MinVolatilityPct:     30.0,
 		Enabled:              true,
 	}
 }

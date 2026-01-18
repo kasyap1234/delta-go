@@ -69,15 +69,16 @@ func TestFeeAwareScalper_AnalyzeWithFeatures(t *testing.T) {
 	scalper := NewFeeAwareScalper(cfg, engine)
 
 	f := features.MarketFeatures{
-		Symbol:    "BTCUSD",
-		SpreadBps: 5.0,
-		BestBid:   50000,
-		BestAsk:   50050,
+		Symbol:        "BTCUSD",
+		SpreadBps:     5.0,
+		BestBid:       50000,
+		BestAsk:       50050,
+		HistoricalVol: 0.2, // 20% vol
 	}
 
 	// 1. Scalper disabled
 	scalper.cfg.Enabled = false
-	sig := scalper.AnalyzeWithFeatures(f, nil)
+	sig := scalper.Analyze(f, nil)
 	if sig.Action != ActionNone || sig.Reason != "scalper disabled" {
 		t.Errorf("Expected disabled reason, got %v", sig.Reason)
 	}
@@ -85,14 +86,14 @@ func TestFeeAwareScalper_AnalyzeWithFeatures(t *testing.T) {
 
 	// 2. Spread too tight
 	f.SpreadBps = 0.5
-	sig = scalper.AnalyzeWithFeatures(f, nil)
+	sig = scalper.Analyze(f, nil)
 	if sig.Action != ActionNone || sig.Reason != "spread too tight" {
 		t.Errorf("Expected spread too tight reason, got %v", sig.Reason)
 	}
 	f.SpreadBps = 5.0
 
 	// 3. Insufficient OBI history
-	sig = scalper.AnalyzeWithFeatures(f, nil)
+	sig = scalper.Analyze(f, nil)
 	if sig.Action != ActionNone || sig.Reason != "insufficient OBI history" {
 		t.Errorf("Expected insufficient OBI, got %v", sig.Reason)
 	}
@@ -103,7 +104,7 @@ func TestFeeAwareScalper_AnalyzeWithFeatures(t *testing.T) {
 	engine.AddOBISnapshot(features.OBISnapshot{Imbalance: 0.8, MidPrice: 50200})
 	engine.AddOBISnapshot(features.OBISnapshot{Imbalance: 0.8, MidPrice: 50600}) // >1% increase from 50000
 
-	sig = scalper.AnalyzeWithFeatures(f, nil)
+	sig = scalper.Analyze(f, nil)
 	if sig.Action != ActionBuy {
 		t.Errorf("Expected ActionBuy, got %v (Reason: %s)", sig.Action, sig.Reason)
 	}
@@ -115,7 +116,7 @@ func TestFeeAwareScalper_AnalyzeWithFeatures(t *testing.T) {
 	engine.AddOBISnapshot(features.OBISnapshot{Imbalance: -0.8, MidPrice: 49800})
 	engine.AddOBISnapshot(features.OBISnapshot{Imbalance: -0.8, MidPrice: 49400}) // >1% decrease from 50000
 
-	sig = scalper.AnalyzeWithFeatures(f, nil)
+	sig = scalper.Analyze(f, nil)
 	if sig.Action != ActionSell {
 		t.Errorf("Expected ActionSell, got %v (Reason: %s)", sig.Action, sig.Reason)
 	}
