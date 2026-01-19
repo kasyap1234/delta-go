@@ -298,6 +298,14 @@ func (ws *WebSocketClient) handleMessage(data []byte) {
 			ws.onOrderbook(msg.Data)
 		}
 
+	case containsSubstr(msg.Type, "funding_rate") || containsSubstr(msg.Channel, "funding_rate"):
+		if ws.onFundingRate != nil {
+			var fundingUpdate FundingRateUpdate
+			if err := json.Unmarshal(msg.Data, &fundingUpdate); err == nil {
+				ws.onFundingRate(fundingUpdate)
+			}
+		}
+
 	case msg.Type == "subscribed":
 		log.Printf("Subscribed to: %s", msg.Channel)
 

@@ -1,6 +1,7 @@
 package strategy
 
 import (
+	"log"
 	"time"
 
 	"github.com/kasyap/delta-go/go/pkg/delta"
@@ -38,6 +39,9 @@ type FundingArbitrageStrategy struct {
 }
 
 func NewFundingArbitrageStrategy(cfg FundingArbitrageConfig) *FundingArbitrageStrategy {
+	if cfg.Enabled {
+		log.Printf("WARNING: Funding arbitrage is ENABLED but unhedged. Delta India only offers perpetuals (no dated futures for hedging). Positions have directional risk.")
+	}
 	return &FundingArbitrageStrategy{
 		cfg:       cfg,
 		positions: make(map[string]*FundingPosition),

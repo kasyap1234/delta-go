@@ -99,10 +99,10 @@ func (f *FundingFetcher) fetchFromBinance(symbol string, start, end time.Time) (
 		if err != nil {
 			return nil, fmt.Errorf("binance request failed: %w", err)
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
 			return nil, fmt.Errorf("binance API error: %s", string(body))
 		}
 
@@ -113,8 +113,10 @@ func (f *FundingFetcher) fetchFromBinance(symbol string, start, end time.Time) (
 		}
 
 		if err := json.NewDecoder(resp.Body).Decode(&binanceRates); err != nil {
+			resp.Body.Close()
 			return nil, fmt.Errorf("failed to decode binance response: %w", err)
 		}
+		resp.Body.Close() // Close immediately after reading, not deferred
 
 		if len(binanceRates) == 0 {
 			break
