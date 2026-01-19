@@ -1,8 +1,0 @@
-{
-  "track_id": "logging_monitoring_20260118",
-  "type": "feature",
-  "status": "new",
-  "created_at": "2026-01-18T12:00:00Z",
-  "updated_at": "2026-01-18T12:00:00Z",
-  "description": "Implement robust logging and monitoring for live trading execution"
-}
