@@ -48,6 +48,12 @@ func main() {
 		symbols[i] = strings.TrimSpace(symbols[i])
 	}
 
+	// Initialize Products map for contract value conversions
+	products := make(map[string]*delta.Product)
+	for _, sym := range symbols {
+		products[sym] = delta.MockProduct(sym)
+	}
+
 	// Create backtest config
 	btConfig := backtest.Config{
 		StartTime:       start,
@@ -62,6 +68,7 @@ func main() {
 		LatencyMs:       50,
 		SimulateFunding: true,
 		DataCacheDir:    *cacheDirFlag,
+		Products:        products,
 	}
 
 	// Create Delta client (for data fetching - using default config)
@@ -130,7 +137,7 @@ func registerStrategies(engine *backtest.Engine, strategyType string) {
 		scalper := strategy.NewFeeAwareScalper(strategy.DefaultScalperConfig(), featuresEngine)
 		funding := strategy.NewFundingArbitrageStrategy(strategy.DefaultFundingArbitrageConfig())
 		grid := strategy.NewGridTradingStrategy(strategy.DefaultGridConfig(), "BTCUSD")
-		
+
 		selector := strategy.NewStrategySelector(scalper, funding, grid)
 		engine.RegisterStrategy(selector)
 

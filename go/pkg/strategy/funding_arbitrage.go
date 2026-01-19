@@ -89,7 +89,6 @@ func (s *FundingArbitrageStrategy) Analyze(f features.MarketFeatures, candles []
 			Side:       side,
 			Confidence: 0.65,
 			Reason:     "high funding rate opportunity",
-			IsHedged:   true,
 		}
 	}
 

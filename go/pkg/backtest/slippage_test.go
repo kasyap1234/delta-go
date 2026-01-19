@@ -79,17 +79,21 @@ func TestCalculateFee(t *testing.T) {
 }
 
 func TestPositionUnrealizedPnL(t *testing.T) {
+	// Test with contract-based semantics:
+	// Size = contracts (e.g., 10 contracts)
+	// ContractValue = 0.001 (for BTCUSD, 1 contract = 0.001 BTC)
+	// P&L = contracts * contractValue * (currentPrice - entryPrice) * direction
 	pos := &Position{
 		Side:       "buy",
-		Size:       10.0,
+		Size:       10.0, // 10 contracts
 		EntryPrice: 50000,
 	}
 
-	// Price goes up 1%
-	pnl := pos.UnrealizedPnL(50500, 1.0)
+	// Price goes up by 500 (1%)
+	// P&L = 10 * 0.001 * (50500 - 50000) * 1 = 10 * 0.001 * 500 = 5.0
+	pnl := pos.UnrealizedPnL(50500, 0.001)
 
-	// Expected: (50500-50000)/50000 * 10 * 1 = 0.1
-	expected := 0.1
+	expected := 5.0
 	if abs(pnl-expected) > 0.01 {
 		t.Errorf("Expected PnL %.4f, got %.4f", expected, pnl)
 	}
@@ -101,10 +105,12 @@ func TestPositionUnrealizedPnL(t *testing.T) {
 		EntryPrice: 50000,
 	}
 
-	// Price goes down - short profits
-	shortPnl := shortPos.UnrealizedPnL(49500, 1.0)
-	if shortPnl <= 0 {
-		t.Errorf("Short position should profit when price drops, got %.4f", shortPnl)
+	// Price goes down by 500 - short profits
+	// P&L = 10 * 0.001 * (49500 - 50000) * -1 = 10 * 0.001 * 500 = 5.0
+	shortPnl := shortPos.UnrealizedPnL(49500, 0.001)
+	expected = 5.0
+	if abs(shortPnl-expected) > 0.01 {
+		t.Errorf("Short position should profit when price drops, expected %.4f got %.4f", expected, shortPnl)
 	}
 }
 

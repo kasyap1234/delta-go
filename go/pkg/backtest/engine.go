@@ -167,7 +167,13 @@ func (e *Engine) simulate() error {
 		}
 	}
 
-	fmt.Printf("\nSimulation complete. Final equity: $%.2f\n", e.equity)
+	// Get the final mark-to-market equity from the equity curve for consistent reporting
+	finalEquity := e.equity
+	if len(e.equityCurve) > 0 {
+		finalEquity = e.equityCurve[len(e.equityCurve)-1].Equity
+	}
+
+	fmt.Printf("\nSimulation complete. Final equity: $%.2f\n", finalEquity)
 	return nil
 }
 
@@ -287,8 +293,6 @@ func crossedFundingBoundary(prev, curr time.Time) bool {
 	return false
 }
 
-
-
 func oppositeSide(side string) string {
 	if side == "buy" {
 		return "sell"
@@ -304,8 +308,22 @@ func (e *Engine) processFunding(ts time.Time) {
 			continue
 		}
 
-		// Calculate funding payment - Size is NOTIONAL VALUE in dollars
-		payment := pos.Size * rate
+		// Get notional value for funding calculation
+		product := e.getProduct(symbol)
+		contracts := int(pos.Size)
+		// Use mark price (current candle close) for notional calculation
+		candle := e.getCandleAt(symbol, ts)
+		markPrice := pos.EntryPrice // Fallback to entry price
+		if candle != nil {
+			markPrice = candle.Close
+		}
+		notional, err := delta.ContractsToNotional(contracts, markPrice, product)
+		if err != nil || notional <= 0 {
+			continue
+		}
+
+		// Calculate funding payment based on notional value
+		payment := notional * rate
 
 		// Funding mechanics:
 		// Positive rate: longs pay shorts
@@ -387,32 +405,40 @@ func (e *Engine) processSignalAtPrice(symbol string, signal strategy.Signal, can
 
 // openPositionAtPrice opens a new position at a specific fill price
 func (e *Engine) openPositionAtPrice(symbol string, signal strategy.Signal, candle *delta.Candle, ts time.Time, fillPrice float64) {
-	// 1. Calculate position size based on equity and risk
-	size := e.calculatePositionSize(fillPrice, signal.StopLoss)
-	if size <= 0 {
+	// 1. Calculate position size in contracts based on equity and risk
+	contracts := e.calculatePositionSize(symbol, fillPrice, signal.StopLoss)
+	if contracts <= 0 {
 		return
 	}
 
-	// 2. Check if we have enough margin
-	requiredMargin := e.calculateRequiredMargin(size)
+	// 2. Convert contracts to notional for margin calculation
+	product := e.getProduct(symbol)
+	notional, err := delta.ContractsToNotional(contracts, fillPrice, product)
+	if err != nil || notional <= 0 {
+		return
+	}
+
+	// 3. Check if we have enough margin
+	requiredMargin := e.calculateRequiredMargin(notional)
 	if requiredMargin > e.getAvailableMargin() {
 		return // Not enough margin
 	}
 
-	// 3. Calculate slippage based on ACTUAL size
-	slippageAmt := e.slippage.Calculate(signal.Side, size, *candle, 0)
+	// 4. Calculate slippage based on ACTUAL size (use notional for slippage model)
+	slippageAmt := e.slippage.Calculate(signal.Side, notional, *candle, 0)
 	actualEntryPrice := ApplySlippage(fillPrice, slippageAmt, signal.Side)
 
-	// 4. Calculate fee based on ACTUAL size (notional)
-	fee := CalculateFee(actualEntryPrice, size, 1.0, e.config.TakerFeeBps)
+	// 5. Calculate fee based on notional
+	fee := CalculateFee(actualEntryPrice, notional, 1.0, e.config.TakerFeeBps)
 
-	// 5. Reserve margin
+	// 6. Reserve margin
 	e.usedMargin += requiredMargin
 
+	// Store size as contracts (int converted to float64 for Position struct compatibility)
 	pos := &Position{
 		Symbol:        symbol,
 		Side:          signal.Side,
-		Size:          size,
+		Size:          float64(contracts), // Store contracts as Size
 		EntryPrice:    actualEntryPrice,
 		EntryTime:     ts,
 		StopLoss:      signal.StopLoss,
@@ -448,38 +474,44 @@ func (e *Engine) closePositionAtPrice(symbol string, exitPrice float64, ts time.
 		exitSide = "buy"
 	}
 
+	// Get product for notional conversion
+	product := e.getProduct(symbol)
+	contracts := int(pos.Size) // Size is stored as contracts (float64 for struct compatibility)
+
+	// Convert to notional for slippage and fee calculations
+	entryNotional, _ := delta.ContractsToNotional(contracts, pos.EntryPrice, product)
+
 	slippageAmt := 0.0
-	if candle != nil {
-		slippageAmt = e.slippage.Calculate(exitSide, pos.Size, *candle, 0)
+	if candle != nil && entryNotional > 0 {
+		slippageAmt = e.slippage.Calculate(exitSide, entryNotional, *candle, 0)
 	}
 	actualExitPrice := ApplySlippage(exitPrice, slippageAmt, exitSide)
 
-	// Calculate exit fee
-	exitFee := CalculateFee(actualExitPrice, pos.Size, 1.0, e.config.TakerFeeBps)
+	// Calculate exit notional and fee
+	exitNotional, _ := delta.ContractsToNotional(contracts, actualExitPrice, product)
+	exitFee := CalculateFee(actualExitPrice, exitNotional, 1.0, e.config.TakerFeeBps)
 
-	// Calculate P&L based on percentage move
-	// Size is already the NOTIONAL VALUE in dollars (not contract count)
-	pricePctChange := (actualExitPrice - pos.EntryPrice) / pos.EntryPrice
+	// Calculate P&L based on notional difference
+	// For linear futures: PnL = contracts * contractValue * (exitPrice - entryPrice) * direction
+	cv, _ := delta.ParseContractValue(product)
+	priceDiff := actualExitPrice - pos.EntryPrice
 
-	// For a long: +10% price = +10% of position value
-	// For a short: +10% price = -10% of position value
+	// For a long: +price = +profit, for short: +price = -profit
 	multiplier := 1.0
 	if pos.Side == "sell" {
 		multiplier = -1.0
 	}
 
-	// Size IS the notional value in dollars
-	grossPnL := pos.Size * pricePctChange * multiplier
+	// Gross P&L in USD
+	grossPnL := float64(contracts) * cv * priceDiff * multiplier
 
-	// Calculate slippage cost in dollars (slippage is in price units, convert to notional impact)
-	// For entry: slippage * (notional / entry_price) = cost
-	entrySlipCost := pos.EntrySlip * (pos.Size / pos.EntryPrice)
-	exitSlipCost := slippageAmt * (pos.Size / actualExitPrice)
+	// Calculate slippage cost in dollars
+	entrySlipCost := pos.EntrySlip * (entryNotional / pos.EntryPrice)
+	exitSlipCost := slippageAmt * (exitNotional / actualExitPrice)
 
-	// NetPnL includes ALL costs: entry fee, exit fee, slippage costs, and funding
-	// Note: EntryFee was deducted from equity at entry time, so we don't subtract it again here
-	// FundingPaid was also applied to equity in processFunding(), so we don't subtract it again
-	// But we DO record them in the trade for accurate metrics reporting
+	// NetPnL includes ALL costs: exit fee, slippage costs
+	// Note: EntryFee was deducted from equity at entry time
+	// FundingPaid was also applied to equity in processFunding()
 	netPnL := grossPnL - exitFee - entrySlipCost - exitSlipCost
 
 	// Record trade
@@ -487,7 +519,7 @@ func (e *Engine) closePositionAtPrice(symbol string, exitPrice float64, ts time.
 		ID:            fmt.Sprintf("%s-%d", symbol, len(e.trades)),
 		Symbol:        symbol,
 		Side:          pos.Side,
-		Size:          pos.Size,
+		Size:          pos.Size, // Contracts
 		EntryPrice:    pos.EntryPrice,
 		EntryTime:     pos.EntryTime,
 		EntryFee:      pos.EntryFee,
@@ -523,9 +555,8 @@ func (e *Engine) getAvailableMargin() float64 {
 }
 
 // calculatePositionSize determines position size based on risk
-// Returns the NOTIONAL VALUE in dollars (not contract count!)
-// This value divided by entry price gives the "contract equivalent"
-func (e *Engine) calculatePositionSize(entryPrice, stopLoss float64) float64 {
+// Returns the contract count (not USD notional) - aligned with Delta Exchange API
+func (e *Engine) calculatePositionSize(symbol string, entryPrice, stopLoss float64) int {
 	// Don't trade if equity is too low or negative
 	if e.equity <= 10 {
 		return 0
@@ -543,31 +574,49 @@ func (e *Engine) calculatePositionSize(entryPrice, stopLoss float64) float64 {
 	// Calculate max position value based on AVAILABLE margin and leverage
 	maxPositionValue := availableMargin * float64(e.config.Leverage)
 
+	var positionValue float64
+
 	// Calculate position size based on stop distance
 	if stopLoss > 0 && entryPrice > 0 {
 		stopPct := absFloat(entryPrice-stopLoss) / entryPrice
 		if stopPct > 0 {
 			// Position value such that stopPct loss = riskAmount
-			// positionValue * stopPct = riskAmount
-			// positionValue = riskAmount / stopPct
-			positionValue := riskAmount / stopPct
+			positionValue = riskAmount / stopPct
 
 			// Cap at max leverage
 			if positionValue > maxPositionValue {
 				positionValue = maxPositionValue
 			}
-
-			// Return notional value (we'll treat Size as notional dollars)
-			return positionValue
 		}
 	}
 
 	// Default: 10% of available margin as position value
-	defaultValue := availableMargin * 0.10 * float64(e.config.Leverage)
-	if defaultValue > maxPositionValue {
-		defaultValue = maxPositionValue
+	if positionValue <= 0 {
+		positionValue = availableMargin * 0.10 * float64(e.config.Leverage)
+		if positionValue > maxPositionValue {
+			positionValue = maxPositionValue
+		}
 	}
-	return defaultValue
+
+	// Convert notional to contracts using product metadata
+	product := e.getProduct(symbol)
+	contracts, err := delta.NotionalToContracts(positionValue, entryPrice, product)
+	if err != nil || contracts < 1 {
+		return 0
+	}
+
+	return contracts
+}
+
+// getProduct returns the product metadata for a symbol
+func (e *Engine) getProduct(symbol string) *delta.Product {
+	if e.config.Products != nil {
+		if p, ok := e.config.Products[symbol]; ok {
+			return p
+		}
+	}
+	// Fallback to mock product
+	return delta.MockProduct(symbol)
 }
 
 // updateEquityCurve records current equity point
@@ -588,7 +637,15 @@ func (e *Engine) updateEquityCurve(ts time.Time) {
 			// Fallback to entry price if no price history
 			markPrice = pos.EntryPrice
 		}
-		totalEquity += pos.UnrealizedPnL(markPrice, 1.0)
+
+		// Get contract value from product
+		product := e.getProduct(symbol)
+		cv, err := delta.ParseContractValue(product)
+		if err != nil {
+			cv = 0.001 // Default to BTC contract value
+		}
+
+		totalEquity += pos.UnrealizedPnL(markPrice, cv)
 	}
 
 	// Update peak

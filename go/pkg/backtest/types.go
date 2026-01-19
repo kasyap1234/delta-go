@@ -35,12 +35,21 @@ type Config struct {
 
 	// Data caching
 	DataCacheDir string
+
+	// Product metadata for contract value conversions
+	Products map[string]*delta.Product
 }
 
 // DefaultConfig returns sensible defaults calibrated to Delta Exchange India
 func DefaultConfig() Config {
+	symbols := []string{"BTCUSD", "ETHUSD", "SOLUSD"}
+	products := make(map[string]*delta.Product)
+	for _, sym := range symbols {
+		products[sym] = delta.MockProduct(sym)
+	}
+
 	return Config{
-		Symbols:         []string{"BTCUSD", "ETHUSD", "SOLUSD"},
+		Symbols:         symbols,
 		Resolution:      "5m",
 		InitialCapital:  200.0,
 		Leverage:        10,
@@ -50,6 +59,7 @@ func DefaultConfig() Config {
 		LatencyMs:       50,
 		SimulateFunding: true,
 		DataCacheDir:    ".backtest_cache",
+		Products:        products,
 	}
 }
 
@@ -73,13 +83,15 @@ type Position struct {
 }
 
 // UnrealizedPnL calculates unrealized P&L at given price
+// Size is now contract count, contractValue is from Product.ContractValue
 func (p *Position) UnrealizedPnL(currentPrice float64, contractValue float64) float64 {
 	multiplier := 1.0
 	if p.Side == "sell" {
 		multiplier = -1.0
 	}
-	priceDiff := (currentPrice - p.EntryPrice) * multiplier
-	return (priceDiff / p.EntryPrice) * p.Size * contractValue
+	// P&L = contracts * contractValue * (currentPrice - entryPrice) * direction
+	priceDiff := currentPrice - p.EntryPrice
+	return p.Size * contractValue * priceDiff * multiplier
 }
 
 // Trade represents a completed trade with all costs

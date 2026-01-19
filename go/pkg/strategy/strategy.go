@@ -17,7 +17,6 @@ type Signal struct {
 	StopLoss   float64
 	TakeProfit float64
 	Reason     string
-	IsHedged   bool
 }
 
 // Strategy interface for backtest compatibility

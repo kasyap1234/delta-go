@@ -475,39 +475,7 @@ func (bot *StructuralBot) executeFundingArbEntry(signal strategy.Signal, product
 		perpSize = 1
 	}
 
-	// Hedge Execution Logic (Futures Basis Arb)
-	if signal.IsHedged {
-		futureProduct, err := bot.deltaClient.GetFuturesProductForPerp(product.Symbol)
-		if err != nil {
-			log.Printf("PURE ARBITRAGE BLOCKED: Could not find futures product for %s: %v", product.Symbol, err)
-			return // ABORT to ensure pure arbitrage
-		}
-
-		futureSize, err := delta.NotionalToContracts(targetNotional, signal.Price, futureProduct)
-		if err != nil {
-			log.Printf("PURE ARBITRAGE BLOCKED: Failed to calculate future size: %v", err)
-			return
-		}
-
-		// Place Future Long Order
-		// Marketable limit order
-		futurePriceStr, _ := delta.RoundToTickSize(signal.Price*1.01, futureProduct.TickSize)
-		futureReq := &delta.OrderRequest{
-			ProductID:   futureProduct.ID,
-			Size:        futureSize,
-			Side:        "buy",
-			OrderType:   "limit_order",
-			LimitPrice:  futurePriceStr,
-			TimeInForce: "ioc",
-		}
-
-		futureOrder, err := bot.deltaClient.PlaceOrder(futureReq)
-		if err != nil {
-			log.Printf("PURE ARBITRAGE BLOCKED: Failed to place Future Buy: %v", err)
-			return
-		}
-		log.Printf("[%s] HEDGE: Future Buy Placed: %d contracts (Order: %d)", futureProduct.Symbol, futureSize, futureOrder.ID)
-	}
+	// Note: Hedge execution removed - Delta India only offers perpetuals, no dated futures
 
 	req := &delta.OrderRequest{
 		ProductID:   product.ID,
@@ -752,7 +720,7 @@ func (bot *StructuralBot) updatePerformanceIfDue(force bool, product *delta.Prod
 		Positions:     open,
 	})
 	bot.lastPerfUpdate = time.Now()
-	
+
 	// Log Heartbeat to Console
 	stats := bot.perfTracker.Report()
 	msg := formatHeartbeat(stats)
@@ -764,13 +732,13 @@ func formatHeartbeat(stats map[string]interface{}) string {
 	pnlPct := stats["pnl_pct"].(float64)
 	positions := stats["open_positions"].(int)
 	equity := stats["last_equity"].(float64)
-	
+
 	pnlSign := "+"
 	if pnlAbs < 0 {
 		pnlSign = "" // negative number has sign already
 	}
-	
-	return fmt.Sprintf("HEARTBEAT | Eq: %.2f | PnL: %s%.2f (%s%.2f%%) | Pos: %d", 
+
+	return fmt.Sprintf("HEARTBEAT | Eq: %.2f | PnL: %s%.2f (%s%.2f%%) | Pos: %d",
 		equity, pnlSign, pnlAbs, pnlSign, pnlPct, positions)
 }
 

@@ -106,10 +106,15 @@ func (mc *MetricsCalculator) Calculate(trades []Trade, equityCurve []EquityPoint
 }
 
 func (mc *MetricsCalculator) computeTotalReturn() float64 {
-	if len(mc.equityCurve) < 2 {
+	if len(mc.equityCurve) < 1 {
 		return 0
 	}
-	initial := mc.equityCurve[0].Equity
+	// Use config's InitialCapital as the baseline, not the first equity curve point
+	// which may include unrealized P&L from multi-symbol tracking
+	initial := mc.config.InitialCapital
+	if initial <= 0 {
+		return 0
+	}
 	final := mc.equityCurve[len(mc.equityCurve)-1].Equity
 	return (final - initial) / initial
 }

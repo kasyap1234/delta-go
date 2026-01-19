@@ -56,3 +56,49 @@ func ContractsToNotional(contracts int, price float64, product *Product) (float6
 
 	return float64(contracts) * price * cv, nil
 }
+
+// MockProduct returns a Product with typical contract values for backtesting
+// without requiring live API calls. These values are based on Delta Exchange specs.
+func MockProduct(symbol string) *Product {
+	// Default values based on Delta Exchange contract specifications
+	// https://docs.delta.exchange
+	switch symbol {
+	case "BTCUSD", "BTCINR":
+		return &Product{
+			ID:            27,
+			Symbol:        symbol,
+			ProductType:   "perpetual_futures",
+			ContractValue: "0.001", // 1 contract = 0.001 BTC
+			TickSize:      "0.5",
+			SettlingAsset: Asset{Symbol: "USDT"},
+		}
+	case "ETHUSD", "ETHINR":
+		return &Product{
+			ID:            139,
+			Symbol:        symbol,
+			ProductType:   "perpetual_futures",
+			ContractValue: "0.01", // 1 contract = 0.01 ETH
+			TickSize:      "0.05",
+			SettlingAsset: Asset{Symbol: "USDT"},
+		}
+	case "SOLUSD", "SOLINR":
+		return &Product{
+			ID:            259,
+			Symbol:        symbol,
+			ProductType:   "perpetual_futures",
+			ContractValue: "0.1", // 1 contract = 0.1 SOL
+			TickSize:      "0.01",
+			SettlingAsset: Asset{Symbol: "USDT"},
+		}
+	default:
+		// Generic default for unknown symbols
+		return &Product{
+			ID:            0,
+			Symbol:        symbol,
+			ProductType:   "perpetual_futures",
+			ContractValue: "0.001",
+			TickSize:      "0.01",
+			SettlingAsset: Asset{Symbol: "USDT"},
+		}
+	}
+}
